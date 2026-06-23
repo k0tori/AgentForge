@@ -3,9 +3,14 @@ from __future__ import annotations
 import json
 import time
 
+from pydantic import BaseModel
+
 from src.agents.base import BaseAgent
 from src.agents.prompts.evaluator import EVALUATOR_SYSTEM_PROMPT, EVALUATOR_USER_PROMPT
 from src.harness.evaluation.fresh_context import FreshContextEvaluator
+from src.harness.evaluation.rubric import compute_verdict
+from src.tools.file_ops import read_file
+from src.tools.test_ops import run_lint, run_tests
 from src.workflow.state import AgentState, Criterion
 
 
@@ -32,7 +37,6 @@ class EvaluatorAgent(BaseAgent):
         # Read conventions
         conventions_path = f"{codebase_path}/CONVENTIONS.md"
         try:
-            from src.tools.file_ops import read_file
             conventions = read_file(conventions_path)
         except FileNotFoundError:
             conventions = "No conventions found."
@@ -51,7 +55,6 @@ class EvaluatorAgent(BaseAgent):
         sensor_results = await self._run_sensors(codebase_path)
 
         # Call LLM for reasoning sensors
-        from pydantic import BaseModel
 
         class EvalOutput(BaseModel):
             criteria_results: list[dict]
@@ -81,7 +84,6 @@ class EvaluatorAgent(BaseAgent):
             eval_feedback = f"Issues found:\n{json.dumps(blocking, indent=2)}\n\nFeedback:\n{feedback}"
 
         # Compute sprint-level verdict (for report only, not routing)
-        from src.harness.evaluation.rubric import compute_verdict
         dimension_scores = result.get("dimension_scores", {})
         sprint_verdict = compute_verdict(dimension_scores)
 
@@ -93,12 +95,16 @@ class EvaluatorAgent(BaseAgent):
         }
 
     async def _run_sensors(self, codebase_path: str) -> dict:
-        """Run computational sensors (tests + lint) independently."""
+        """Run computational sensors (tests + lint) independently.
+
+        Args:
+            codebase_path: Path to the codebase. Also used as the allowed workspace
+                boundary — subprocess will refuse to run outside this directory.
+        """
         results = {}
         try:
-            from src.tools.test_ops import run_tests, run_lint
-            results["tests"] = run_tests(codebase_path)
-            results["lint"] = run_lint(codebase_path)
+            results["tests"] = run_tests(codebase_path, allowed_workspace=codebase_path)
+            results["lint"] = run_lint(codebase_path, allowed_workspace=codebase_path)
         except Exception as e:
             results["error"] = str(e)
         return results

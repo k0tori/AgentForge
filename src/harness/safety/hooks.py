@@ -28,7 +28,10 @@ def is_system_file(file_path: str) -> bool:
 def is_secret_file(file_path: str) -> bool:
     """Check if the path points to a secret/credential file."""
     name = Path(file_path).name.lower()
-    return any(name.startswith(pat) or name == pat for pat in SECRET_PATTERNS)
+    return any(
+        name.startswith(pat) or name == pat or name.endswith(pat)
+        for pat in SECRET_PATTERNS
+    )
 
 
 def is_within_workspace(file_path: str, workspace: str) -> bool:

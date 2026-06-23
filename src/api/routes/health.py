@@ -22,10 +22,13 @@ async def health_check() -> dict:
     except Exception:
         result["status"] = "degraded"
 
-    # Check Redis
+    # Check Redis (use synchronous client for health check on Windows)
     try:
-        r = await get_redis()
-        await r.ping()
+        import redis as sync_redis
+
+        r = sync_redis.Redis(host="localhost", port=6379, decode_responses=True)
+        r.ping()
+        r.close()
         result["redis"] = True
     except Exception:
         result["status"] = "degraded"

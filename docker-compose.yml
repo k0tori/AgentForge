@@ -1,3 +1,6 @@
+# WARNING: Credentials below are for local development ONLY.
+# Override POSTGRES_PASSWORD and other secrets via environment variables in production.
+
 services:
   postgres:
     image: pgvector/pgvector:pg16

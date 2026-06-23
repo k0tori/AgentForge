@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.storage.database import async_session_factory
+
+logger = logging.getLogger(__name__)
+
+# Allowlist of tables that accept embeddings — prevents SQL injection via table name
+ALLOWED_EMBEDDING_TABLES = frozenset({"code_embeddings", "best_practice_embeddings"})
 
 
 async def init_vector_tables() -> None:
@@ -41,16 +48,25 @@ async def init_vector_tables() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_code_embeddings_ivfflat "
                 "ON code_embeddings USING ivfflat (embedding vector_cosine_ops)"
             ))
-        except Exception:
-            pass  # ivfflat index requires data to exist first
+        except Exception as e:
+            logger.debug("Skipping ivfflat index for code_embeddings (may need data first): %s", e)
         try:
             await session.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_best_practice_ivfflat "
                 "ON best_practice_embeddings USING ivfflat (embedding vector_cosine_ops)"
             ))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Skipping ivfflat index for best_practice_embeddings (may need data first): %s", e)
         await session.commit()
+
+
+def _validate_table_name(table: str) -> None:
+    """Validate table name against allowlist to prevent SQL injection."""
+    if table not in ALLOWED_EMBEDDING_TABLES:
+        raise ValueError(
+            f"Invalid table name: '{table}'. "
+            f"Allowed tables: {ALLOWED_EMBEDDING_TABLES}"
+        )
 
 
 async def insert_embedding(
@@ -62,7 +78,7 @@ async def insert_embedding(
     **kwargs,
 ) -> None:
     """Insert an embedding into the specified table."""
-    # Simplified: use raw SQL for flexibility
+    _validate_table_name(table)
     embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
     await session.execute(
         text(f"INSERT INTO {table} (content, embedding, metadata, :extra_cols) VALUES (:content, :embedding::vector, :metadata::jsonb, :extra_vals)"),
@@ -78,6 +94,7 @@ async def search_similar(
     filter_metadata: dict | None = None,
 ) -> list[dict]:
     """Search for similar embeddings using cosine distance."""
+    _validate_table_name(table)
     embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
     result = await session.execute(
         text(f"""

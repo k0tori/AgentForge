@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import re
 
+from pydantic import BaseModel
+
 from src.agents.base import BaseAgent
 from src.agents.prompts.planner import PLANNER_SYSTEM_PROMPT, PLANNER_USER_PROMPT
 from src.harness.context.disclosure import ProgressiveDisclosure
+from src.tools.file_ops import read_file
 from src.workflow.state import AgentState, Criterion, Step
 
 
@@ -29,7 +32,6 @@ class PlannerAgent(BaseAgent):
         # Read conventions
         conventions_path = f"{codebase_path}/CONVENTIONS.md"
         try:
-            from src.tools.file_ops import read_file
             conventions = read_file(conventions_path)
         except FileNotFoundError:
             conventions = "No CONVENTIONS.md found."
@@ -44,7 +46,6 @@ class PlannerAgent(BaseAgent):
         messages = self._build_messages(system, user)
 
         # Call LLM with structured output
-        from pydantic import BaseModel, Field
 
         class PlanOutput(BaseModel):
             plan: list[dict]

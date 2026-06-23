@@ -5,7 +5,7 @@ import os
 import tempfile
 import time
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from src.agents.base import BaseAgent
 from src.agents.prompts.generator import (
@@ -14,12 +14,17 @@ from src.agents.prompts.generator import (
     GENERATOR_USER_PROMPT,
 )
 from src.harness.loop.controller import LoopController
+from src.harness.safety.hooks import pre_write_hook
+from src.tools.file_ops import read_file
 from src.tools.registry import registry
 from src.workflow.state import AgentState, ToolCall
 
 
 class GeneratorAgent(BaseAgent):
     """Generator: implements code using tools in a loop."""
+
+    MAX_RESULT_CHARS: int = 2000  # Max characters kept from a tool result
+    MAX_SUMMARY_CHARS: int = 500  # Max characters kept from final response summary
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -44,7 +49,6 @@ class GeneratorAgent(BaseAgent):
         # Read conventions
         conventions_path = f"{codebase_path}/CONVENTIONS.md"
         try:
-            from src.tools.file_ops import read_file
             conventions = read_file(conventions_path)
         except FileNotFoundError:
             conventions = "No conventions found."
@@ -85,7 +89,7 @@ class GeneratorAgent(BaseAgent):
                 tool_calls_log.append({
                     "tool_name": "final_response",
                     "args": {},
-                    "result": summary[:500],
+                    "result": summary[:self.MAX_SUMMARY_CHARS],
                     "timestamp": time.time(),
                 })
                 break
@@ -114,7 +118,6 @@ class GeneratorAgent(BaseAgent):
 
                 # Safety check for write_file
                 if tool_name == "write_file":
-                    from src.harness.safety.hooks import pre_write_hook
                     hook_result = pre_write_hook(
                         tool_args.get("path", ""),
                         tool_args.get("content", ""),
@@ -135,7 +138,7 @@ class GeneratorAgent(BaseAgent):
                 # Execute tool
                 try:
                     result = await registry.execute(tool_name, **tool_args)
-                    result_str = str(result)[:2000]
+                    result_str = str(result)[:self.MAX_RESULT_CHARS]
                 except Exception as e:
                     result_str = f"Error: {e}"
 
@@ -147,7 +150,6 @@ class GeneratorAgent(BaseAgent):
                 })
 
                 # Add tool result to messages
-                from langchain_core.messages import ToolMessage
                 messages.append(ToolMessage(
                     content=result_str,
                     tool_call_id=tc["id"],
@@ -178,7 +180,8 @@ class GeneratorAgent(BaseAgent):
             for fname in files:
                 fpath = os.path.join(root, fname)
                 try:
-                    content = open(fpath, encoding="utf-8").read()
+                    with open(fpath, encoding="utf-8") as f:
+                        content = f.read()
                     rel_path = os.path.relpath(fpath, sprint_workspace)
                     diff_parts.append(f"--- /dev/null\n+++ b/{rel_path}\n{content}")
                 except (UnicodeDecodeError, PermissionError):

@@ -3,14 +3,29 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from src.harness.safety.hooks import is_within_workspace
 from src.tools.registry import registry
 
+# Truncation limits for tool output
+MAX_TEST_OUTPUT_CHARS = 3000
+MAX_LINT_ISSUES = 50
 
-def run_tests(path: str, test_file: str | None = None) -> dict:
-    """Execute pytest in the given directory. Returns pass/fail counts and output."""
+
+def _validate_path(path: str, allowed_workspace: str | None) -> None:
+    """Validate path exists and is within the allowed workspace."""
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Path not found: {path}")
+    if allowed_workspace and not is_within_workspace(path, allowed_workspace):
+        raise PermissionError(
+            f"Path '{path}' is outside allowed workspace: '{allowed_workspace}'"
+        )
+
+
+def run_tests(path: str, test_file: str | None = None, allowed_workspace: str | None = None) -> dict:
+    """Execute pytest in the given directory. Returns pass/fail counts and output."""
+    _validate_path(path, allowed_workspace)
+    p = Path(path)
 
     cmd = ["python", "-m", "pytest", "-v", "--tb=short"]
     if test_file:
@@ -31,17 +46,16 @@ def run_tests(path: str, test_file: str | None = None) -> dict:
             "passed": passed,
             "failed": failed,
             "exit_code": result.returncode,
-            "output": output[-3000:],  # truncate long output
+            "output": output[-MAX_TEST_OUTPUT_CHARS:],
         }
     except subprocess.TimeoutExpired:
         return {"passed": 0, "failed": 0, "exit_code": -1, "output": "Test execution timed out (120s)"}
 
 
-def run_lint(path: str) -> dict:
+def run_lint(path: str, allowed_workspace: str | None = None) -> dict:
     """Execute ruff check in the given directory. Returns issues list."""
+    _validate_path(path, allowed_workspace)
     p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"Path not found: {path}")
 
     try:
         result = subprocess.run(
@@ -53,7 +67,7 @@ def run_lint(path: str) -> dict:
         )
         issues = [line for line in result.stdout.splitlines() if line.strip()]
         return {
-            "issues": issues[:50],  # cap at 50 issues
+            "issues": issues[:MAX_LINT_ISSUES],
             "exit_code": result.returncode,
             "issue_count": len(issues),
         }

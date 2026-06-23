@@ -4,12 +4,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables."""
+    """Application settings loaded from environment variables.
+
+    WARNING: Default DATABASE_URL and REDIS_URL use development credentials.
+    Override via environment variables or .env file in production.
+    """
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    # DeepSeek API
-    DEEPSEEK_API_KEY: str
+    # DeepSeek API (empty default allows tests to import without .env)
+    DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     DEEPSEEK_MODEL: str = "deepseek-chat"
 

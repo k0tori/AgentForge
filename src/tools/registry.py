@@ -93,7 +93,7 @@ class ToolRegistry:
         """Export all tools in LangChain format."""
         return [t.to_langchain_tool() for t in self._tools.values()]
 
-    async def execute(self, name: str, **kwargs) -> Any:
+    async def execute(self, name: str, **kwargs: Any) -> Any:
         """Execute a tool by name."""
         tool = self.get_tool(name)
         if tool is None:

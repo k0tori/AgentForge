@@ -29,4 +29,4 @@ app = FastAPI(
 )
 
 app.include_router(health_router)
-app.include_router(tasks_router)
+app.include_router(tasks_router, prefix="/api/v1")
