@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from typing import Literal, TypedDict
 
 from pydantic import BaseModel, Field

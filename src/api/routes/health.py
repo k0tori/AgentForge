@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import APIRouter
 from sqlalchemy import text
 
-from src.storage.cache import get_redis
 from src.storage.database import async_session_factory
 
 router = APIRouter(tags=["health"])

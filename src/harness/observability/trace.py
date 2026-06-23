@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 @dataclass
@@ -54,7 +54,7 @@ class TraceCollector:
         """Begin a new trace."""
         self.task_id = task_id
         self.timeline = []
-        self._start_time = datetime.now(timezone.utc).timestamp()
+        self._start_time = datetime.now(UTC).timestamp()
 
     def add_step(
         self,

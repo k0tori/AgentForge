@@ -5,7 +5,7 @@ import os
 import tempfile
 import time
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 
 from src.agents.base import BaseAgent
 from src.agents.prompts.generator import (
@@ -17,7 +17,7 @@ from src.harness.loop.controller import LoopController
 from src.harness.safety.hooks import pre_write_hook
 from src.tools.file_ops import read_file
 from src.tools.registry import registry
-from src.workflow.state import AgentState, ToolCall
+from src.workflow.state import AgentState
 
 
 class GeneratorAgent(BaseAgent):
@@ -99,57 +99,53 @@ class GeneratorAgent(BaseAgent):
             for tc in response.tool_calls:
                 tool_name = tc["name"]
                 tool_args = tc["args"]
+                result_str = ""
 
                 # Check for repeated actions
                 action_hash = LoopController.hash_action(tool_name, tool_args)
                 if self.loop_controller.should_force_strategy_change(action_hash):
+                    result_str = "BLOCKED: Action repeated too many times. Try a different approach."
                     tool_calls_log.append({
                         "tool_name": tool_name,
                         "args": tool_args,
-                        "result": "BLOCKED: Action repeated too many times. Try a different approach.",
+                        "result": result_str,
                         "timestamp": time.time(),
                     })
-                    messages.append(HumanMessage(
-                        content=f"Tool call '{tool_name}' was blocked due to repetition. Try a different approach."
-                    ))
-                    continue
-
-                self.loop_controller.record_action(action_hash)
-
-                # Safety check for write_file
-                if tool_name == "write_file":
+                elif tool_name == "write_file":
+                    # Safety check for write_file
                     hook_result = pre_write_hook(
                         tool_args.get("path", ""),
                         tool_args.get("content", ""),
                         sprint_workspace,
                     )
                     if hook_result.exit_code != 0:
+                        result_str = f"BLOCKED: {hook_result.reason}"
                         tool_calls_log.append({
                             "tool_name": tool_name,
                             "args": tool_args,
-                            "result": f"BLOCKED: {hook_result.reason}",
+                            "result": result_str,
                             "timestamp": time.time(),
                         })
-                        messages.append(HumanMessage(
-                            content=f"Write blocked: {hook_result.reason}"
-                        ))
-                        continue
+                    else:
+                        self.loop_controller.record_action(action_hash)
+                        result_str = await self._execute_tool(tool_name, tool_args)
+                        tool_calls_log.append({
+                            "tool_name": tool_name,
+                            "args": tool_args,
+                            "result": result_str,
+                            "timestamp": time.time(),
+                        })
+                else:
+                    self.loop_controller.record_action(action_hash)
+                    result_str = await self._execute_tool(tool_name, tool_args)
+                    tool_calls_log.append({
+                        "tool_name": tool_name,
+                        "args": tool_args,
+                        "result": result_str,
+                        "timestamp": time.time(),
+                    })
 
-                # Execute tool
-                try:
-                    result = await registry.execute(tool_name, **tool_args)
-                    result_str = str(result)[:self.MAX_RESULT_CHARS]
-                except Exception as e:
-                    result_str = f"Error: {e}"
-
-                tool_calls_log.append({
-                    "tool_name": tool_name,
-                    "args": tool_args,
-                    "result": result_str,
-                    "timestamp": time.time(),
-                })
-
-                # Add tool result to messages
+                # Always respond with ToolMessage for each tool_call_id
                 messages.append(ToolMessage(
                     content=result_str,
                     tool_call_id=tc["id"],
@@ -171,6 +167,14 @@ class GeneratorAgent(BaseAgent):
         workspace = os.path.join(tempfile.gettempdir(), f"agentforge_sprint_{task_id}_{sprint}")
         os.makedirs(workspace, exist_ok=True)
         return workspace
+
+    async def _execute_tool(self, tool_name: str, tool_args: dict) -> str:
+        """Execute a tool and return the result string."""
+        try:
+            result = await registry.execute(tool_name, **tool_args)
+            return str(result)[:self.MAX_RESULT_CHARS]
+        except Exception as e:
+            return f"Error: {e}"
 
     def _compute_diff(self, sprint_workspace: str, codebase_path: str) -> str:
         """Compute a summary of changes made in the sprint workspace."""

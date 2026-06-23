@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import time
-
-from pydantic import BaseModel
+import re
 
 from src.agents.base import BaseAgent
 from src.agents.prompts.evaluator import EVALUATOR_SYSTEM_PROMPT, EVALUATOR_USER_PROMPT
@@ -49,21 +47,27 @@ class EvaluatorAgent(BaseAgent):
             sprint_contract=contract_text,
         )
 
-        messages = self._build_messages(system, user)
-
         # Run computational sensors independently
         sensor_results = await self._run_sensors(codebase_path)
 
-        # Call LLM for reasoning sensors
+        # Append sensor results to user message
+        sensor_info = ""
+        if "tests" in sensor_results:
+            test_res = sensor_results["tests"]
+            passed = test_res.get("passed", 0)
+            failed = test_res.get("failed", 0)
+            sensor_info += f"\n\n## Independent Test Results\nPassed: {passed}, Failed: {failed}"
+        if "lint" in sensor_results:
+            lint_res = sensor_results["lint"]
+            sensor_info += f"\n\n## Independent Lint Results\nIssues: {lint_res.get('issue_count', 0)}"
 
-        class EvalOutput(BaseModel):
-            criteria_results: list[dict]
-            sprint_verdict: str
-            dimension_scores: dict[str, float]
-            blocking_issues: list[str]
-            feedback: str
+        user += sensor_info
+        messages = self._build_messages(system, user)
 
-        result = await self.llm.chat_structured(messages, EvalOutput)
+        # Call LLM for reasoning sensors (regular chat + JSON parsing)
+        response = await self.llm.chat(messages)
+        content = response.content if isinstance(response.content, str) else str(response.content)
+        result = self._extract_json(content)
 
         # Update contract statuses
         updated_contract = []
@@ -108,3 +112,39 @@ class EvaluatorAgent(BaseAgent):
         except Exception as e:
             results["error"] = str(e)
         return results
+
+    @staticmethod
+    def _extract_json(text: str) -> dict:
+        """Extract JSON object from LLM response text."""
+        match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+
+        start = text.find("{")
+        if start == -1:
+            raise ValueError(f"No JSON object found in response: {text[:200]}")
+
+        depth = 0
+        in_string = False
+        escape_next = False
+        for i in range(start, len(text)):
+            c = text[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if c == "\\":
+                escape_next = True
+                continue
+            if c == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return json.loads(text[start : i + 1])
+
+        raise ValueError(f"Could not extract JSON from response: {text[:200]}")

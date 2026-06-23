@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import re
 
-from pydantic import BaseModel
-
 from src.agents.base import BaseAgent
 from src.agents.prompts.planner import PLANNER_SYSTEM_PROMPT, PLANNER_USER_PROMPT
 from src.harness.context.disclosure import ProgressiveDisclosure
@@ -45,13 +43,12 @@ class PlannerAgent(BaseAgent):
 
         messages = self._build_messages(system, user)
 
-        # Call LLM with structured output
+        # Call LLM (regular chat, parse JSON manually for DeepSeek compatibility)
+        response = await self.llm.chat(messages)
+        content = response.content if isinstance(response.content, str) else str(response.content)
 
-        class PlanOutput(BaseModel):
-            plan: list[dict]
-            sprint_contract: list[dict]
-
-        result = await self.llm.chat_structured(messages, PlanOutput)
+        # Extract JSON from response
+        result = self._extract_json(content)
 
         # Parse and validate
         plan = [Step(**s).model_dump() for s in result.get("plan", [])][:self.max_sprints]
@@ -68,3 +65,41 @@ class PlannerAgent(BaseAgent):
             "sprint_contract": contract,
             "current_sprint": 1,
         }
+
+    @staticmethod
+    def _extract_json(text: str) -> dict:
+        """Extract JSON object from LLM response text."""
+        # Try to find JSON block in markdown code fence
+        match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+
+        # Try to find raw JSON object using bracket counting
+        start = text.find("{")
+        if start == -1:
+            raise ValueError(f"No JSON object found in response: {text[:200]}")
+
+        depth = 0
+        in_string = False
+        escape_next = False
+        for i in range(start, len(text)):
+            c = text[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if c == "\\":
+                escape_next = True
+                continue
+            if c == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return json.loads(text[start : i + 1])
+
+        raise ValueError(f"Could not extract JSON from response: {text[:200]}")

@@ -12,14 +12,14 @@ Your job is to analyze the user's request and the existing codebase, then produc
 
 ## Output Format
 Return a JSON object with this structure:
-{
+{{
   "plan": [
-    {"id": 1, "description": "...", "dependencies": []}
+    {{"id": 1, "description": "...", "dependencies": []}}
   ],
   "sprint_contract": [
-    {"id": "c1", "description": "...", "status": "FAIL", "evidence": ""}
+    {{"id": "c1", "description": "...", "status": "FAIL", "evidence": ""}}
   ]
-}
+}}
 
 ## Codebase Context
 {codebase_summary}

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-
 # DeepSeek pricing (approximate, per 1M tokens)
 DEEPSEEK_INPUT_PRICE_CNY = 1.0   # ¥1 per 1M input tokens
 DEEPSEEK_OUTPUT_PRICE_CNY = 2.0  # ¥2 per 1M output tokens

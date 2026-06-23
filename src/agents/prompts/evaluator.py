@@ -17,22 +17,22 @@ Your job is to INDEPENDENTLY evaluate code against the sprint contract.
 
 ## Output Format
 Return a JSON object:
-{
+{{
   "criteria_results": [
-    {"id": "c1", "status": "PASS", "evidence": "specific reason"},
-    {"id": "c2", "status": "FAIL", "evidence": "specific reason"}
+    {{"id": "c1", "status": "PASS", "evidence": "specific reason"}},
+    {{"id": "c2", "status": "FAIL", "evidence": "specific reason"}}
   ],
   "sprint_verdict": "PASS or PASS_WITH_WARNINGS or FAIL",
-  "dimension_scores": {
+  "dimension_scores": {{
     "functional_correctness": 85,
     "code_quality": 70,
     "security": 90,
     "architecture_fit": 80,
     "test_coverage": 75
-  },
+  }},
   "blocking_issues": ["list of issues that must be fixed"],
   "feedback": "overall feedback for the Generator"
-}
+}}
 
 ## Project Conventions
 {conventions}

@@ -80,8 +80,12 @@ async def insert_embedding(
     """Insert an embedding into the specified table."""
     _validate_table_name(table)
     embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+    sql = (
+        f"INSERT INTO {table} (content, embedding, metadata) "
+        "VALUES (:content, :embedding::vector, :metadata::jsonb)"
+    )
     await session.execute(
-        text(f"INSERT INTO {table} (content, embedding, metadata, :extra_cols) VALUES (:content, :embedding::vector, :metadata::jsonb, :extra_vals)"),
+        text(sql),
         {"content": content, "embedding": embedding_str, "metadata": "{}"},
     )
 

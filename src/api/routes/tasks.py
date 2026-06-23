@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter
+
 from src.api.schemas.task import TaskCreateRequest, TaskCreateResponse, TaskStatusResponse
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])

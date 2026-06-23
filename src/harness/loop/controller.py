@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 
 from src.config import settings
 
-
 ActionHash = str
 
 
