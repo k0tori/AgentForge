@@ -68,13 +68,24 @@ class PlannerAgent(BaseAgent):
 
     @staticmethod
     def _extract_json(text: str) -> dict:
-        """Extract JSON object from LLM response text."""
-        # Try to find JSON block in markdown code fence
+        """Extract JSON object from LLM response text.
+
+        Handles common LLM JSON errors:
+        - JSON in markdown code fences
+        - Missing commas between properties
+        - Trailing commas
+        """
+        # Try markdown code fence first
         match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
         if match:
-            return json.loads(match.group(1))
+            json_str = match.group(1).strip()
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                repaired = PlannerAgent._repair_json(json_str)
+                return json.loads(repaired)
 
-        # Try to find raw JSON object using bracket counting
+        # Find raw JSON object using bracket counting
         start = text.find("{")
         if start == -1:
             raise ValueError(f"No JSON object found in response: {text[:200]}")
@@ -100,6 +111,36 @@ class PlannerAgent(BaseAgent):
             elif c == "}":
                 depth -= 1
                 if depth == 0:
-                    return json.loads(text[start : i + 1])
+                    json_str = text[start : i + 1]
+                    try:
+                        return json.loads(json_str)
+                    except json.JSONDecodeError:
+                        repaired = PlannerAgent._repair_json(json_str)
+                        return json.loads(repaired)
 
         raise ValueError(f"Could not extract JSON from response: {text[:200]}")
+
+    @staticmethod
+    def _repair_json(json_str: str) -> str:
+        """Attempt to repair common JSON formatting issues from LLM output."""
+        # Fix trailing commas: ,} → } and ,] → ]
+        json_str = re.sub(r",\s*([}\]])", r"\1", json_str)
+
+        # Fix missing commas between properties
+        json_str = re.sub(
+            r'("(?:[^"\\]|\\.)*")\s*\n\s*("(?:[^"\\]|\\.)*"\s*:)',
+            r'\1,\n\2',
+            json_str,
+        )
+
+        # Fix missing commas after closing } or ] before next property
+        json_str = re.sub(r'([}\]])\s*\n\s*("(?:[^"\\]|\\.)*"\s*:)', r'\1,\n\2', json_str)
+
+        # Fix missing commas after values before next property
+        json_str = re.sub(
+            r'(true|false|null|\d+(?:\.\d+)?)\s*\n\s*("(?:[^"\\]|\\.)*"\s*:)',
+            r'\1,\n\2',
+            json_str,
+        )
+
+        return json_str

@@ -68,6 +68,7 @@ class GeneratorAgent(BaseAgent):
         user = GENERATOR_USER_PROMPT.format(
             sprint_number=current_sprint,
             sprint_goal=sprint_goal,
+            codebase_path=codebase_path,
         )
 
         # Tool-calling loop
