@@ -25,7 +25,7 @@ async def init_vector_tables() -> None:
                 chunk_type VARCHAR(20) NOT NULL,
                 chunk_name TEXT NOT NULL,
                 content TEXT NOT NULL,
-                embedding VECTOR(1536),
+                embedding VECTOR(384),
                 metadata JSONB,
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -37,7 +37,7 @@ async def init_vector_tables() -> None:
                 category VARCHAR(50) NOT NULL,
                 title TEXT NOT NULL,
                 content TEXT NOT NULL,
-                embedding VECTOR(1536),
+                embedding VECTOR(384),
                 source TEXT,
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
@@ -77,17 +77,51 @@ async def insert_embedding(
     metadata: dict | None = None,
     **kwargs,
 ) -> None:
-    """Insert an embedding into the specified table."""
+    """Insert an embedding into the specified table.
+
+    Extra columns (project_path, file_path, chunk_type, chunk_name for code_embeddings;
+    category, title, source for best_practice_embeddings) can be passed via kwargs.
+    """
     _validate_table_name(table)
     embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
-    sql = (
-        f"INSERT INTO {table} (content, embedding, metadata) "
-        "VALUES (:content, :embedding::vector, :metadata::jsonb)"
+
+    # Build column/value lists dynamically from kwargs
+    columns = ["content", "embedding", "metadata"]
+    values = [":content", ":embedding::vector", ":metadata::jsonb"]
+    params: dict = {
+        "content": content,
+        "embedding": embedding_str,
+        "metadata": "{}" if metadata is None else str(metadata).replace("'", '"'),
+    }
+    for key, val in kwargs.items():
+        columns.append(key)
+        values.append(f":{key}")
+        params[key] = val
+
+    col_str = ", ".join(columns)
+    val_str = ", ".join(values)
+    sql = f"INSERT INTO {table} ({col_str}) VALUES ({val_str})"
+    await session.execute(text(sql), params)
+
+
+async def delete_by_project_path(
+    session: AsyncSession,
+    project_path: str,
+) -> int:
+    """Delete all code_embeddings for a given project path. Returns deleted count."""
+    result = await session.execute(
+        text("DELETE FROM code_embeddings WHERE project_path = :path"),
+        {"path": project_path},
     )
-    await session.execute(
-        text(sql),
-        {"content": content, "embedding": embedding_str, "metadata": "{}"},
-    )
+    return result.rowcount
+
+
+async def delete_best_practice_embeddings(
+    session: AsyncSession,
+) -> int:
+    """Delete all best_practice_embeddings. Returns deleted count."""
+    result = await session.execute(text("DELETE FROM best_practice_embeddings"))
+    return result.rowcount
 
 
 async def search_similar(
@@ -102,7 +136,9 @@ async def search_similar(
     embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
     result = await session.execute(
         text(f"""
-            SELECT id, content, metadata, 1 - (embedding <=> :query::vector) as similarity
+            SELECT id, content, metadata,
+                   file_path, chunk_type, chunk_name, project_path, category, title, source,
+                   1 - (embedding <=> :query::vector) as similarity
             FROM {table}
             ORDER BY embedding <=> :query::vector
             LIMIT :limit
@@ -111,6 +147,18 @@ async def search_similar(
     )
     rows = result.fetchall()
     return [
-        {"id": str(row[0]), "content": row[1], "metadata": row[2], "similarity": row[3]}
+        {
+            "id": str(row[0]),
+            "content": row[1],
+            "metadata": row[2],
+            "file_path": row[3],
+            "chunk_type": row[4],
+            "chunk_name": row[5],
+            "project_path": row[6],
+            "category": row[7],
+            "title": row[8],
+            "source": row[9],
+            "similarity": row[10],
+        }
         for row in rows
     ]

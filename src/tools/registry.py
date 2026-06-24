@@ -94,10 +94,12 @@ class ToolRegistry:
         return [t.to_langchain_tool() for t in self._tools.values()]
 
     async def execute(self, name: str, **kwargs: Any) -> Any:
-        """Execute a tool by name."""
+        """Execute a tool by name (supports both sync and async functions)."""
         tool = self.get_tool(name)
         if tool is None:
             raise ValueError(f"Tool '{name}' not found")
+        if inspect.iscoroutinefunction(tool.func):
+            return await tool.func(**kwargs)
         return tool.func(**kwargs)
 
 

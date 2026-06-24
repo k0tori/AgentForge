@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     TOY_REPO_PATH: str = "./toy-repo"
 
+    # Embedding
+    EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+    EMBEDDING_DIM: int = 384
+
     # Loop Controller
     MAX_SPRINT_RETRIES: int = 3
     MAX_ITERATIONS: int = 10

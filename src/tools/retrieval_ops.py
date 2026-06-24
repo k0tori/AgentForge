@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+from src.retrieval.search import search
 from src.tools.registry import registry
 
 
-def retrieval_search(query: str, top_k: int = 5) -> list[dict]:
+async def retrieval_search(query: str, top_k: int = 5) -> list[dict]:
     """RAG-as-Tool: search code and conventions for relevant context.
 
-    STUB: Full implementation deferred to Phase 4.
-    Returns empty list for now.
+    Searches indexed code chunks and best practices using vector similarity.
     """
-    return []
+    return await search(query, top_k=top_k)
 
 
 registry.register(
