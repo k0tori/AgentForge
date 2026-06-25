@@ -84,18 +84,25 @@ class EvaluatorAgent(BaseAgent):
         blocking = result.get("blocking_issues", [])
         feedback = result.get("feedback", "")
         eval_feedback = None
-        if any(c["status"] == "FAIL" for c in updated_contract):
+        has_fail = any(c["status"] == "FAIL" for c in updated_contract)
+        if has_fail:
             eval_feedback = f"Issues found:\n{json.dumps(blocking, indent=2)}\n\nFeedback:\n{feedback}"
 
         # Compute sprint-level verdict (for report only, not routing)
         dimension_scores = result.get("dimension_scores", {})
         sprint_verdict = compute_verdict(dimension_scores)
 
+        # Increment retry_count if any criteria failed
+        retry_count = state.get("retry_count", 0)
+        if has_fail:
+            retry_count += 1
+
         return {
             **state,
             "sprint_contract": updated_contract,
             "eval_feedback": eval_feedback,
             "final_verdict": sprint_verdict,
+            "retry_count": retry_count,
         }
 
     async def _run_sensors(self, codebase_path: str) -> dict:

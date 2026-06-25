@@ -4,7 +4,8 @@ from __future__ import annotations
 class ReplayEngine:
     """Replay a previous execution from its trace (section 6.2).
 
-    STUB: Full implementation deferred. Interface exists from day one.
+    STUB: Full implementation deferred to Phase 2.
+    Interface exists from day one, but replay() raises NotImplementedError.
     """
 
     def __init__(self, trace_data: dict) -> None:
@@ -13,10 +14,10 @@ class ReplayEngine:
     async def replay(self) -> dict:
         """Re-execute the trace and return results.
 
-        STUB: Returns the original trace data as-is.
+        STUB: Raises NotImplementedError.
         Full implementation will re-execute each step with the same inputs.
         """
-        return self.trace_data
+        raise NotImplementedError("Replay engine not yet implemented")
 
     def get_step(self, step_number: int) -> dict | None:
         """Get a specific step from the trace."""

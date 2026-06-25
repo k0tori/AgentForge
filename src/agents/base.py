@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 
 from langchain_core.messages import BaseMessage
 
 from src.llm.client import LLMClient
 from src.workflow.state import AgentState
+
+logger = logging.getLogger(__name__)
 
 
 class BaseAgent(ABC):
@@ -22,6 +25,17 @@ class BaseAgent(ABC):
     async def execute(self, state: AgentState) -> AgentState:
         """Execute the agent's role and return updated state."""
         ...
+
+    async def safe_execute(self, state: AgentState) -> AgentState:
+        """Execute with error handling. Wraps execute() with try-catch."""
+        try:
+            return await self.execute(state)
+        except Exception as e:
+            logger.error("Agent %s failed: %s", self.__class__.__name__, e, exc_info=True)
+            return {
+                **state,
+                "error": f"{self.__class__.__name__} failed: {e}",
+            }
 
     def _build_messages(self, system_prompt: str, user_content: str) -> list[BaseMessage]:
         """Build a message list from system prompt and user content."""

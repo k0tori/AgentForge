@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 from sqlalchemy import text
@@ -91,7 +92,7 @@ async def insert_embedding(
     params: dict = {
         "content": content,
         "embedding": embedding_str,
-        "metadata": "{}" if metadata is None else str(metadata).replace("'", '"'),
+        "metadata": "{}" if metadata is None else json.dumps(metadata),
     }
     for key, val in kwargs.items():
         columns.append(key)

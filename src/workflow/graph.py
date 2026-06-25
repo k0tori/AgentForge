@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from langgraph.graph import END, StateGraph
 
 from src.agents.evaluator import EvaluatorAgent
@@ -8,6 +10,8 @@ from src.agents.planner import PlannerAgent
 from src.llm.client import LLMClient
 from src.workflow.edges import handle_escalation, route_after_evaluate
 from src.workflow.state import AgentState
+
+logger = logging.getLogger(__name__)
 
 
 def build_graph() -> StateGraph:
@@ -23,10 +27,10 @@ def build_graph() -> StateGraph:
 
     graph = StateGraph(AgentState)
 
-    # Add nodes
-    graph.add_node("plan", planner.execute)
-    graph.add_node("generate", generator.execute)
-    graph.add_node("evaluate", evaluator.execute)
+    # Add nodes with safe_execute for error handling
+    graph.add_node("plan", planner.safe_execute)
+    graph.add_node("generate", generator.safe_execute)
+    graph.add_node("evaluate", evaluator.safe_execute)
     graph.add_node("escalate", handle_escalation)
 
     # Add edges
@@ -73,6 +77,8 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
     if not task_id:
         task_id = str(uuid.uuid4())
 
+    logger.info("Starting task %s", task_id)
+
     initial_state: AgentState = {
         "request": request,
         "plan": [],
@@ -90,4 +96,10 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
 
     graph = get_compiled_graph()
     final_state = await graph.ainvoke(initial_state)
+
+    if final_state.get("error"):
+        logger.error("Task %s failed: %s", task_id, final_state["error"])
+    else:
+        logger.info("Task %s completed with verdict: %s", task_id, final_state.get("final_verdict"))
+
     return final_state

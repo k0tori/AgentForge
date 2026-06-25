@@ -8,9 +8,13 @@ from fastapi import FastAPI
 
 from src.api.routes.health import router as health_router
 from src.api.routes.tasks import router as tasks_router
+from src.logging_config import setup_logging
 from src.storage.cache import close_redis
 from src.storage.database import init_db
 from src.storage.vector import init_vector_tables
+
+# Setup logging on import
+setup_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +22,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: initialize storage on startup, close on shutdown."""
+    logger.info("Starting AgentForge application")
     await init_db()
     await init_vector_tables()
 
@@ -29,7 +34,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.exception("RAG indexing failed (non-fatal)")
 
+    logger.info("AgentForge application started")
     yield
+    logger.info("Shutting down AgentForge application")
     await close_redis()
 
 
