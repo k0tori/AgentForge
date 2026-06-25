@@ -35,5 +35,8 @@ class Settings(BaseSettings):
     TOKEN_BUDGET: int = 100_000
     TIMEOUT_SECONDS: int = 300
 
+    # API Security (empty means no auth required in dev)
+    API_KEY: str = ""
+
 
 settings = Settings()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -40,8 +41,26 @@ def run_tests(path: str, test_file: str | None = None, allowed_workspace: str | 
             timeout=120,
         )
         output = result.stdout + result.stderr
-        passed = output.count(" PASSED")
-        failed = output.count(" FAILED")
+
+        # Parse pytest summary line (more robust than counting occurrences)
+        # Examples: "5 passed, 2 failed", "5 passed", "2 failed, 1 error"
+        passed = 0
+        failed = 0
+
+        # Try to parse the summary line first
+        summary_match = re.search(r'(\d+)\s+passed', output)
+        if summary_match:
+            passed = int(summary_match.group(1))
+
+        summary_match = re.search(r'(\d+)\s+failed', output)
+        if summary_match:
+            failed = int(summary_match.group(1))
+
+        # Fallback to counting if no summary found
+        if passed == 0 and failed == 0:
+            passed = output.count(" PASSED")
+            failed = output.count(" FAILED")
+
         return {
             "passed": passed,
             "failed": failed,

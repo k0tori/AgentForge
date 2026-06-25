@@ -9,7 +9,11 @@ from pydantic import BaseModel, Field
 class TaskCreateRequest(BaseModel):
     """Request body for creating a task."""
 
-    intent: str = Field(..., description="The user's functional request")
+    intent: str = Field(
+        ...,
+        description="The user's functional request",
+        max_length=10000,
+    )
     codebase: dict = Field(
         default_factory=lambda: {"type": "local_path", "path": "./toy-repo"},
         description="Codebase info: type and path",

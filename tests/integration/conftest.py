@@ -111,12 +111,14 @@ def initial_state(toy_repo_path: Path) -> AgentState:
 @pytest.fixture
 def mock_llm_client() -> LLMClient:
     """Create a mock LLM client that returns pre-recorded responses."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
     client = MagicMock(spec=LLMClient)
     client.total_tokens_used = 0
     client.chat = AsyncMock()
     client.build_messages = MagicMock(side_effect=lambda sys, user, hist=None: [
-        {"role": "system", "content": sys},
-        {"role": "user", "content": user},
+        SystemMessage(content=sys),
+        HumanMessage(content=user),
     ])
     return client
 

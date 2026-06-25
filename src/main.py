@@ -4,10 +4,14 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.api.routes.health import router as health_router
 from src.api.routes.tasks import router as tasks_router
+from src.config import settings
 from src.logging_config import setup_logging
 from src.storage.cache import close_redis
 from src.storage.database import init_db
@@ -17,6 +21,25 @@ from src.storage.vector import init_vector_tables
 setup_logging()
 
 logger = logging.getLogger(__name__)
+
+
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    """Middleware to validate API key if configured."""
+
+    async def dispatch(self, request: Request, call_next):
+        # Skip auth for health check and if no API key configured
+        if request.url.path == "/api/v1/health" or not settings.API_KEY:
+            return await call_next(request)
+
+        # Check for API key in header
+        api_key = request.headers.get("X-API-Key")
+        if api_key != settings.API_KEY:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing API key"},
+            )
+
+        return await call_next(request)
 
 
 @asynccontextmanager
@@ -46,6 +69,18 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, restrict to specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Add API key middleware
+app.add_middleware(APIKeyMiddleware)
 
 app.include_router(health_router)
 app.include_router(tasks_router, prefix="/api/v1")

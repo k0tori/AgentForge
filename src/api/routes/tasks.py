@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -12,7 +13,12 @@ from src.api.schemas.task import TaskCreateRequest, TaskCreateResponse, TaskStat
 from src.api.task_manager import TaskEvent, TaskStatus, task_manager
 from src.workflow.graph import run_task
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+# Store background task references to prevent garbage collection
+_background_tasks: set[asyncio.Task] = set()
 
 
 def _validate_codebase_path(path: str) -> str:
@@ -44,8 +50,10 @@ async def create_task(request: TaskCreateRequest) -> TaskCreateResponse:
         codebase_path=codebase_path,
     )
 
-    # Start background execution
-    asyncio.create_task(_execute_task(task.task_id, request.intent, codebase_path))
+    # Start background execution with proper error handling
+    bg_task = asyncio.create_task(_execute_task(task.task_id, request.intent, codebase_path))
+    _background_tasks.add(bg_task)
+    bg_task.add_done_callback(_background_tasks.discard)
 
     return TaskCreateResponse(
         task_id=task.task_id,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.harness.loop.controller import LoopController
+from src.config import settings
 from src.workflow.state import AgentState
 
 
@@ -23,9 +23,8 @@ def route_after_evaluate(state: AgentState) -> str:
     if all_pass:
         return "end"
 
-    # Check retry budget
-    controller = LoopController()
-    if retry_count < controller.max_sprint_retries:
+    # Check retry budget (using config directly instead of instantiating LoopController)
+    if retry_count < settings.MAX_SPRINT_RETRIES:
         return "generate"
 
     # Max retries exceeded

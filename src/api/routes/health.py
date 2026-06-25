@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import redis.asyncio as aioredis
 from fastapi import APIRouter
 from sqlalchemy import text
 
+from src.config import settings
 from src.storage.database import async_session_factory
 
 router = APIRouter(tags=["health"])
@@ -21,13 +23,11 @@ async def health_check() -> dict:
     except Exception:
         result["status"] = "degraded"
 
-    # Check Redis (use synchronous client for health check on Windows)
+    # Check Redis (async)
     try:
-        import redis as sync_redis
-
-        r = sync_redis.Redis(host="localhost", port=6379, decode_responses=True)
-        r.ping()
-        r.close()
+        r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        await r.ping()
+        await r.close()
         result["redis"] = True
     except Exception:
         result["status"] = "degraded"

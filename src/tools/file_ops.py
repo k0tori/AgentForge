@@ -6,13 +6,19 @@ from src.tools.registry import registry
 
 
 def read_file(path: str) -> str:
-    """Read a file and return its content as a string."""
+    """Read a file and return its content as a string.
+
+    Handles binary files gracefully by returning an error message.
+    """
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
     if not p.is_file():
         raise IsADirectoryError(f"Not a file: {path}")
-    return p.read_text(encoding="utf-8")
+    try:
+        return p.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return f"[Binary file: {path} - cannot read as text]"
 
 
 def list_directory(path: str, max_depth: int = 3) -> str:
