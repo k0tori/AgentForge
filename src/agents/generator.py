@@ -78,6 +78,10 @@ class GeneratorAgent(BaseAgent):
         tool_calls_log: list[dict] = []
         iteration = 0
 
+        # Reset token baseline so the budget measures THIS loop's consumption,
+        # not the cumulative total across all agents sharing the same LLMClient.
+        self.loop_controller.reset_token_baseline(self.llm.total_tokens_used)
+
         while self.loop_controller.can_continue(iteration, self.llm.total_tokens_used):
             iteration += 1
 

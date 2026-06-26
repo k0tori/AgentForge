@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # Loop Controller
     MAX_SPRINT_RETRIES: int = 3
     MAX_ITERATIONS: int = 10
-    TOKEN_BUDGET: int = 100_000
+    TOKEN_BUDGET: int = 150_000
     TIMEOUT_SECONDS: int = 300
 
     # API Security (empty means no auth required in dev)

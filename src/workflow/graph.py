@@ -12,6 +12,16 @@ from src.llm.client import LLMClient
 from src.workflow.edges import handle_escalation, route_after_evaluate
 from src.workflow.state import AgentState
 
+# Ensure all tool modules are imported so their registry.register() calls execute
+# before any agent calls registry.to_langchain_tools().  The individual imports
+# in agents/planner.py, agents/generator.py, agents/evaluator.py cover file_ops
+# and test_ops, but code_ops (search_code) is not imported by the Generator's
+# dependency chain.  Importing the modules here guarantees the full tool set is
+# available when the LLM requests tool schemas.
+import src.tools.code_ops  # noqa: F401
+import src.tools.file_ops  # noqa: F401
+import src.tools.test_ops  # noqa: F401
+
 logger = logging.getLogger(__name__)
 
 

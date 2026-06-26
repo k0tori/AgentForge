@@ -22,15 +22,30 @@ class LoopController:
     _action_counts: dict[ActionHash, int] = field(default_factory=dict)
     _start_time: float = field(default_factory=time.time)
     _total_tokens: int = field(default=0)
+    _token_baseline: int = field(default=0)
 
     def check_iteration_budget(self, current: int) -> bool:
         """Return True if within budget (can continue)."""
         return current < self.max_iterations
 
+    def reset_token_baseline(self, current_tokens: int = 0) -> None:
+        """Record the token count at the start of a loop run.
+
+        Subsequent calls to check_token_budget() will measure the *delta*
+        from this baseline rather than the absolute total.  This prevents
+        earlier agents (e.g. Planner) from eating into this agent's budget.
+        """
+        self._token_baseline = current_tokens
+        self._total_tokens = current_tokens
+
     def check_token_budget(self, used: int) -> bool:
-        """Return True if within token budget."""
+        """Return True if within token budget.
+
+        Compares *delta from baseline* against the budget so that tokens
+        consumed by earlier agents in the same LLMClient are not counted.
+        """
         self._total_tokens = used
-        return used < self.token_budget
+        return (used - self._token_baseline) < self.token_budget
 
     def check_timeout(self) -> bool:
         """Return True if within time budget."""
