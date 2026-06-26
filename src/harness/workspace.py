@@ -28,10 +28,19 @@ class SprintWorkspace:
         self.codebase_path = Path(codebase_path)
         self.path = Path(tempfile.gettempdir()) / f"agentforge_sprint_{task_id}_{sprint}"
 
-    def create(self) -> str:
-        """Seed: 把现有代码完整拷进 sprint workspace，Generator 在这个基础上改。"""
+    def create(self, *, force_reseed: bool = True) -> str:
+        """Seed: 把现有代码完整拷进 sprint workspace，Generator 在这个基础上改。
+
+        Args:
+            force_reseed: True (默认) 则清除已有 workspace 重新 seed；
+                          False 则保留已有内容（retry 时复用上次的代码）。
+        """
         if self.path.exists():
-            shutil.rmtree(self.path)
+            if force_reseed:
+                shutil.rmtree(self.path)
+            else:
+                logger.info("Sprint workspace preserved for retry: %s", self.path)
+                return str(self.path)
         shutil.copytree(self.codebase_path, self.path, ignore=IGNORE_PATTERNS)
         logger.info("Sprint workspace seeded: %s -> %s", self.codebase_path, self.path)
         return str(self.path)

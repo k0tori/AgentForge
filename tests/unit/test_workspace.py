@@ -95,7 +95,7 @@ def test_discard_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_create_cleans_existing_workspace(tmp_path: Path) -> None:
-    """create() should remove and re-seed if workspace already exists."""
+    """create(force_reseed=True) should remove and re-seed if workspace already exists."""
     codebase = tmp_path / "codebase"
     codebase.mkdir()
     (codebase / "v1.py").write_text("version 1")
@@ -103,16 +103,45 @@ def test_create_cleans_existing_workspace(tmp_path: Path) -> None:
     ws = SprintWorkspace(str(codebase), "test-006", 1)
 
     # First create
-    path1 = ws.create()
+    path1 = ws.create(force_reseed=True)
     assert (Path(path1) / "v1.py").read_text() == "version 1"
 
-    # Modify codebase and create again
+    # Modify codebase and create again with force_reseed
     (codebase / "v1.py").write_text("version 2")
     (codebase / "v2.py").write_text("new file")
-    path2 = ws.create()
+    path2 = ws.create(force_reseed=True)
 
     assert path1 == path2  # same path
     assert (Path(path2) / "v1.py").read_text() == "version 2"
     assert (Path(path2) / "v2.py").read_text() == "new file"
+
+    ws.discard()
+
+
+def test_create_preserves_workspace_on_retry(tmp_path: Path) -> None:
+    """create(force_reseed=False) should keep previous attempt's code."""
+    codebase = tmp_path / "codebase"
+    codebase.mkdir()
+    (codebase / "main.py").write_text("original")
+
+    ws = SprintWorkspace(str(codebase), "test-007", 1)
+
+    # First create — seeds from codebase
+    path1 = ws.create(force_reseed=True)
+    assert (Path(path1) / "main.py").read_text() == "original"
+
+    # Simulate Generator modifying workspace (not codebase)
+    (Path(path1) / "main.py").write_text("generator attempt 1")
+    (Path(path1) / "new_feature.py").write_text("attempt 1 code")
+
+    # Retry with force_reseed=False — should keep Generator's work
+    path2 = ws.create(force_reseed=False)
+    assert path1 == path2
+    assert (Path(path2) / "main.py").read_text() == "generator attempt 1"
+    assert (Path(path2) / "new_feature.py").read_text() == "attempt 1 code"
+
+    # Codebase itself should be untouched
+    assert (codebase / "main.py").read_text() == "original"
+    assert not (codebase / "new_feature.py").exists()
 
     ws.discard()

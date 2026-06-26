@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import time
+from pathlib import Path
 
 from langchain_core.messages import ToolMessage
 
@@ -99,8 +101,13 @@ class GeneratorAgent(BaseAgent):
             messages.append(response)
             for tc in response.tool_calls:
                 tool_name = tc["name"]
-                tool_args = tc["args"]
+                tool_args = dict(tc["args"])  # copy to avoid mutating the original
                 result_str = ""
+
+                # Resolve relative paths against sprint workspace so that
+                # pre_write_hook sees the correct absolute path and tools
+                # read/write in the right directory.
+                self._resolve_tool_paths(tool_args, sprint_workspace)
 
                 # Check for repeated actions
                 action_hash = LoopController.hash_action(tool_name, tool_args)
@@ -165,14 +172,30 @@ class GeneratorAgent(BaseAgent):
     def _create_sprint_workspace(self, state: AgentState) -> str:
         """Create a seeded sprint workspace by copying existing codebase.
 
-        Returns the workspace path. The SprintWorkspace object is stored in
-        state["sprint_workspace"] so Evaluator can test against it.
+        On the first attempt (retry_count == 0), always reseed from the
+        codebase.  On retries, preserve the previous attempt's code so the
+        Generator can do targeted fixes instead of rewriting from scratch.
         """
         codebase_path = state.get("codebase_path", "./toy-repo")
         task_id = state.get("task_id", "default")
         sprint = state.get("current_sprint", 1)
+        retry_count = state.get("retry_count", 0)
         workspace = SprintWorkspace(codebase_path, task_id, sprint)
-        return workspace.create()
+        return workspace.create(force_reseed=(retry_count == 0))
+
+    @staticmethod
+    def _resolve_tool_paths(tool_args: dict, sprint_workspace: str) -> None:
+        """Resolve relative paths in tool args against the sprint workspace.
+
+        LLMs typically return workspace-relative paths (e.g. ``src/models/tag.py``).
+        Without resolution, ``pre_write_hook`` would compare the CWD-relative
+        resolve against the sprint workspace and reject the write.
+        """
+        if "path" not in tool_args:
+            return
+        p = Path(tool_args["path"])
+        if not p.is_absolute():
+            tool_args["path"] = str(Path(sprint_workspace) / p)
 
     async def _execute_tool(self, tool_name: str, tool_args: dict) -> str:
         """Execute a tool and return the result string."""
@@ -183,17 +206,47 @@ class GeneratorAgent(BaseAgent):
             return f"Error: {e}"
 
     def _compute_diff(self, sprint_workspace: str, codebase_path: str) -> str:
-        """Compute a summary of changes made in the sprint workspace."""
-        diff_parts = []
+        """Compute a unified diff between sprint_workspace and codebase_path.
+
+        Skips unchanged files. Produces ``--- a/`` / ``+++ b/`` for modified
+        files and ``--- /dev/null`` / ``+++ b/`` for genuinely new files.
+        """
+        diff_parts: list[str] = []
         for root, dirs, files in os.walk(sprint_workspace):
-            dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git", "node_modules")]
+            dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git", "node_modules", ".pytest_cache")]
             for fname in files:
                 fpath = os.path.join(root, fname)
+                rel_path = os.path.relpath(fpath, sprint_workspace)
+                original_path = os.path.join(codebase_path, rel_path)
+
                 try:
                     with open(fpath, encoding="utf-8") as f:
-                        content = f.read()
-                    rel_path = os.path.relpath(fpath, sprint_workspace)
-                    diff_parts.append(f"--- /dev/null\n+++ b/{rel_path}\n{content}")
+                        new_content = f.read()
                 except (UnicodeDecodeError, PermissionError):
                     continue
-        return "\n".join(diff_parts) if diff_parts else "(no files written)"
+
+                if os.path.isfile(original_path):
+                    try:
+                        with open(original_path, encoding="utf-8") as f:
+                            old_content = f.read()
+                    except (UnicodeDecodeError, PermissionError):
+                        old_content = ""
+
+                    if old_content == new_content:
+                        continue
+
+                    diff_lines = difflib.unified_diff(
+                        old_content.splitlines(keepends=True),
+                        new_content.splitlines(keepends=True),
+                        fromfile=f"a/{rel_path}",
+                        tofile=f"b/{rel_path}",
+                    )
+                    diff_str = "".join(diff_lines)
+                    if diff_str:
+                        diff_parts.append(diff_str)
+                else:
+                    diff_parts.append(
+                        f"--- /dev/null\n+++ b/{rel_path}\n{new_content}"
+                    )
+
+        return "\n".join(diff_parts) if diff_parts else "(no changes)"

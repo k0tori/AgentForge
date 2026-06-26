@@ -88,7 +88,13 @@ class EvaluatorAgent(BaseAgent):
         eval_feedback = None
         has_fail = any(c["status"] == "FAIL" for c in updated_contract)
         if has_fail:
-            eval_feedback = f"Issues found:\n{json.dumps(blocking, indent=2)}\n\nFeedback:\n{feedback}"
+            passed = [c for c in updated_contract if c["status"] == "PASS"]
+            parts = []
+            if passed:
+                parts.append("Already passing (DO NOT break these):\n" + json.dumps(passed, indent=2))
+            parts.append("Issues found:\n" + json.dumps(blocking, indent=2))
+            parts.append("Feedback:\n" + feedback)
+            eval_feedback = "\n\n".join(parts)
 
         # Compute sprint-level verdict (for report only, not routing)
         dimension_scores = result.get("dimension_scores", {})

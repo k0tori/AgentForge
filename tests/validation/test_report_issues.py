@@ -345,7 +345,7 @@ class TestDeadCode:
 
     def test_cleanup_old_tasks_has_timezone_fix(self):
         """cleanup_old_tasks() 应该修复时区 bug"""
-        task_manager_path = SRC_ROOT / "workflow" / "task_manager.py"
+        task_manager_path = SRC_ROOT / "api" / "task_manager.py"
         if not task_manager_path.exists():
             pytest.skip("task_manager.py 不存在")
 

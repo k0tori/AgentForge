@@ -15,21 +15,6 @@ from src.workflow.state import AgentState
 logger = logging.getLogger(__name__)
 
 
-def _post_evaluate(state: AgentState) -> AgentState:
-    """Wrap evaluator: run evaluation, then merge/discard sprint workspace.
-
-    This ensures the sprint workspace lifecycle is properly managed:
-    - All criteria PASS → merge workspace back to codebase
-    - Max retries exceeded → discard workspace
-    - Retries remaining → keep workspace for next iteration
-    """
-    # This is called as a node, so we need to run the evaluator first.
-    # But since LangGraph nodes receive state and return state,
-    # the actual evaluator runs before this node is reached.
-    # Instead, we handle merge/discard in the routing wrapper below.
-    return state
-
-
 def _route_and_cleanup(state: AgentState) -> str:
     """Route after evaluation AND handle sprint workspace lifecycle."""
     route = route_after_evaluate(state)
