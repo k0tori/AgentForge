@@ -86,12 +86,6 @@ class LLMClient:
 
         return response
 
-    async def chat_structured(self, messages: list[BaseMessage], schema: type) -> dict:
-        """Send messages and get a structured response matching the given schema."""
-        structured_model = self._model.with_structured_output(schema)
-        result = await self._retry_with_backoff(structured_model.ainvoke, messages)
-        return result if isinstance(result, dict) else result.model_dump()
-
     @property
     def total_tokens_used(self) -> int:
         return self._total_tokens

@@ -7,11 +7,54 @@ from langgraph.graph import END, StateGraph
 from src.agents.evaluator import EvaluatorAgent
 from src.agents.generator import GeneratorAgent
 from src.agents.planner import PlannerAgent
+from src.harness.workspace import SprintWorkspace
 from src.llm.client import LLMClient
 from src.workflow.edges import handle_escalation, route_after_evaluate
 from src.workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
+
+
+def _post_evaluate(state: AgentState) -> AgentState:
+    """Wrap evaluator: run evaluation, then merge/discard sprint workspace.
+
+    This ensures the sprint workspace lifecycle is properly managed:
+    - All criteria PASS → merge workspace back to codebase
+    - Max retries exceeded → discard workspace
+    - Retries remaining → keep workspace for next iteration
+    """
+    # This is called as a node, so we need to run the evaluator first.
+    # But since LangGraph nodes receive state and return state,
+    # the actual evaluator runs before this node is reached.
+    # Instead, we handle merge/discard in the routing wrapper below.
+    return state
+
+
+def _route_and_cleanup(state: AgentState) -> str:
+    """Route after evaluation AND handle sprint workspace lifecycle."""
+    route = route_after_evaluate(state)
+    sprint_workspace = state.get("sprint_workspace", "")
+
+    if sprint_workspace:
+        codebase_path = state.get("codebase_path", "")
+        task_id = state.get("task_id", "default")
+        sprint = state.get("current_sprint", 1)
+
+        if route == "end":
+            # All criteria PASS: merge workspace back to codebase
+            workspace = SprintWorkspace(codebase_path, task_id, sprint)
+            workspace.path = type(workspace.path)(sprint_workspace)
+            workspace.merge()
+            logger.info("Sprint %d PASSED — workspace merged", sprint)
+        elif route == "escalate":
+            # Max retries exceeded: discard workspace
+            workspace = SprintWorkspace(codebase_path, task_id, sprint)
+            workspace.path = type(workspace.path)(sprint_workspace)
+            workspace.discard()
+            logger.info("Sprint %d ESCALATED — workspace discarded", sprint)
+        # route == "generate": keep workspace for next iteration
+
+    return route
 
 
 def build_graph() -> StateGraph:
@@ -38,10 +81,10 @@ def build_graph() -> StateGraph:
     graph.add_edge("plan", "generate")
     graph.add_edge("generate", "evaluate")
 
-    # Conditional routing after evaluation
+    # Conditional routing after evaluation (with workspace cleanup)
     graph.add_conditional_edges(
         "evaluate",
-        route_after_evaluate,
+        _route_and_cleanup,
         {
             "end": END,
             "generate": "generate",
@@ -89,6 +132,7 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
         "retry_count": 0,
         "task_id": task_id,
         "codebase_path": codebase_path,
+        "sprint_workspace": "",
         "current_sprint": 1,
         "final_verdict": None,
         "error": None,

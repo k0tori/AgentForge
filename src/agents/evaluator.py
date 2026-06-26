@@ -47,8 +47,10 @@ class EvaluatorAgent(BaseAgent):
             sprint_contract=contract_text,
         )
 
-        # Run computational sensors independently
-        sensor_results = await self._run_sensors(codebase_path)
+        # Run computational sensors independently — test the sprint workspace,
+        # not the original codebase, so results reflect Generator's actual changes.
+        sprint_workspace = state.get("sprint_workspace", codebase_path)
+        sensor_results = await self._run_sensors(sprint_workspace)
 
         # Append sensor results to user message
         sensor_info = ""
@@ -105,17 +107,17 @@ class EvaluatorAgent(BaseAgent):
             "retry_count": retry_count,
         }
 
-    async def _run_sensors(self, codebase_path: str) -> dict:
+    async def _run_sensors(self, sprint_workspace: str) -> dict:
         """Run computational sensors (tests + lint) independently.
 
         Args:
-            codebase_path: Path to the codebase. Also used as the allowed workspace
-                boundary — subprocess will refuse to run outside this directory.
+            sprint_workspace: Path to the sprint workspace directory where
+                Generator wrote its code. This is the directory being tested.
         """
         results = {}
         try:
-            results["tests"] = run_tests(codebase_path, allowed_workspace=codebase_path)
-            results["lint"] = run_lint(codebase_path, allowed_workspace=codebase_path)
+            results["tests"] = run_tests(sprint_workspace, allowed_workspace=sprint_workspace)
+            results["lint"] = run_lint(sprint_workspace, allowed_workspace=sprint_workspace)
         except Exception as e:
             results["error"] = str(e)
         return results

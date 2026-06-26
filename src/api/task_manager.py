@@ -64,7 +64,7 @@ class TaskManager:
         Returns:
             Number of tasks removed
         """
-        now = datetime.now()
+        now = datetime.now(UTC)
         to_remove = []
 
         for task_id, task in self._tasks.items():

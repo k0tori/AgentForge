@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import time
 
 from langchain_core.messages import ToolMessage
@@ -15,6 +14,7 @@ from src.agents.prompts.generator import (
 )
 from src.harness.loop.controller import LoopController
 from src.harness.safety.hooks import pre_write_hook
+from src.harness.workspace import SprintWorkspace
 from src.tools.file_ops import read_file
 from src.tools.registry import registry
 from src.workflow.state import AgentState
@@ -157,34 +157,22 @@ class GeneratorAgent(BaseAgent):
 
         return {
             **state,
+            "sprint_workspace": sprint_workspace,
             "code_diff": code_diff,
             "execution_trace": tool_calls_log,
         }
 
     def _create_sprint_workspace(self, state: AgentState) -> str:
-        """Create a temporary directory for this sprint's work.
+        """Create a seeded sprint workspace by copying existing codebase.
 
-        Note: Cleanup should be handled by the caller after sprint completes.
+        Returns the workspace path. The SprintWorkspace object is stored in
+        state["sprint_workspace"] so Evaluator can test against it.
         """
+        codebase_path = state.get("codebase_path", "./toy-repo")
         task_id = state.get("task_id", "default")
         sprint = state.get("current_sprint", 1)
-        workspace = os.path.join(tempfile.gettempdir(), f"agentforge_sprint_{task_id}_{sprint}")
-        os.makedirs(workspace, exist_ok=True)
-        return workspace
-
-    @staticmethod
-    def cleanup_sprint_workspace(workspace: str) -> None:
-        """Clean up sprint workspace after completion.
-
-        Args:
-            workspace: Path to the sprint workspace directory
-        """
-        import shutil
-        try:
-            if os.path.exists(workspace) and "agentforge_sprint_" in workspace:
-                shutil.rmtree(workspace)
-        except Exception:
-            pass  # Best effort cleanup
+        workspace = SprintWorkspace(codebase_path, task_id, sprint)
+        return workspace.create()
 
     async def _execute_tool(self, tool_name: str, tool_args: dict) -> str:
         """Execute a tool and return the result string."""

@@ -49,6 +49,7 @@ class AgentState(TypedDict, total=False):
     retry_count: int  # Current retry count
     task_id: str  # Task UUID for tracking
     codebase_path: str  # Path to the target codebase
+    sprint_workspace: str  # 本轮 Sprint 的隔离工作目录路径
     current_sprint: int  # Current sprint number
     final_verdict: str | None  # Sprint-level verdict (report only, not routing)
     error: str | None  # Error message if task failed

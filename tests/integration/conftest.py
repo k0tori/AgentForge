@@ -102,6 +102,7 @@ def initial_state(toy_repo_path: Path) -> AgentState:
         "retry_count": 0,
         "task_id": "test-task-001",
         "codebase_path": str(toy_repo_path),
+        "sprint_workspace": "",
         "current_sprint": 1,
         "final_verdict": None,
         "error": None,
