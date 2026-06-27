@@ -87,7 +87,7 @@ class GeneratorAgent(BaseAgent):
 
             # Call LLM with tools
             tools = registry.to_langchain_tools()
-            response = await self.llm.chat(messages, tools=tools)
+            response = await self.record_cost(messages, state, role="generator", tools=tools)
 
             # If no tool calls, the LLM is done
             if not response.tool_calls:

@@ -44,7 +44,7 @@ class PlannerAgent(BaseAgent):
         messages = self._build_messages(system, user)
 
         # Call LLM (regular chat, parse JSON manually for DeepSeek compatibility)
-        response = await self.llm.chat(messages)
+        response = await self.record_cost(messages, state, role="planner")
         content = response.content if isinstance(response.content, str) else str(response.content)
 
         # Extract JSON from response

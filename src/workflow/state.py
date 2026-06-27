@@ -53,3 +53,5 @@ class AgentState(TypedDict, total=False):
     current_sprint: int  # Current sprint number
     final_verdict: str | None  # Sprint-level verdict (report only, not routing)
     error: str | None  # Error message if task failed
+    cost_tracker: object  # CostTracker instance (typed as object to avoid circular import)
+    cost_breakdown: dict  # Serialized per-role cost breakdown for API response

@@ -67,7 +67,7 @@ class EvaluatorAgent(BaseAgent):
         messages = self._build_messages(system, user)
 
         # Call LLM for reasoning sensors (regular chat + JSON parsing)
-        response = await self.llm.chat(messages)
+        response = await self.record_cost(messages, state, role="evaluator")
         content = response.content if isinstance(response.content, str) else str(response.content)
         result = extract_json(content)
 
