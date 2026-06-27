@@ -4,6 +4,8 @@
 
 AgentForge implements a **Planner-Generator-Evaluator (PGE)** multi-agent architecture. Core idea: the LLM is replaceable infrastructure; the harness system wrapping it is the engineering value.
 
+**[中文版](README.md)**
+
 ---
 
 ## Why AgentForge?
@@ -127,8 +129,10 @@ Each issue was fixed with tested code changes:
 
 ### Verification Results
 
+After the fixes, the full test suite:
+
 ```
-30 passed, 1 skipped, 3 xfailed
+103 passed, 3 xfailed
 ```
 
 | Priority | Status |
