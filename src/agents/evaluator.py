@@ -49,7 +49,12 @@ class EvaluatorAgent(BaseAgent):
 
         # Run computational sensors independently — test the sprint workspace,
         # not the original codebase, so results reflect Generator's actual changes.
-        sprint_workspace = state.get("sprint_workspace", codebase_path)
+        sprint_workspace = state.get("sprint_workspace", "")
+        if not sprint_workspace:
+            raise ValueError(
+                "sprint_workspace is not set in state — Generator must run before Evaluator. "
+                "Falling back to codebase_path would test the original code, not the Generator's output."
+            )
         sensor_results = await self._run_sensors(sprint_workspace)
 
         # Append sensor results to user message
@@ -111,6 +116,7 @@ class EvaluatorAgent(BaseAgent):
             "eval_feedback": eval_feedback,
             "final_verdict": sprint_verdict,
             "retry_count": retry_count,
+            "sensor_target": sprint_workspace,
         }
 
     async def _run_sensors(self, sprint_workspace: str) -> dict:

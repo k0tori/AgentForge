@@ -52,6 +52,7 @@ class AgentState(TypedDict, total=False):
     sprint_workspace: str  # 本轮 Sprint 的隔离工作目录路径
     current_sprint: int  # Current sprint number
     final_verdict: str | None  # Sprint-level verdict (report only, not routing)
+    sensor_target: str  # Path sensors actually tested (auditable evidence)
     error: str | None  # Error message if task failed
     cost_tracker: object  # CostTracker instance (typed as object to avoid circular import)
     cost_breakdown: dict  # Serialized per-role cost breakdown for API response

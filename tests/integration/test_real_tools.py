@@ -21,6 +21,7 @@ from src.agents.generator import GeneratorAgent
 from src.agents.planner import PlannerAgent
 from src.harness.workspace import SprintWorkspace
 from src.llm.client import LLMClient
+from src.tools.test_ops import run_tests
 from src.workflow.state import AgentState
 
 from .mocks.llm_responses import (
@@ -297,3 +298,94 @@ class TestRealToolExecution:
 
         # Workspace should be cleaned up after merge
         assert not sprint_ws.exists(), "Sprint workspace should be discarded after merge"
+
+    @pytest.mark.asyncio
+    async def test_evaluator_raises_when_sprint_workspace_missing(
+        self, mock_llm_client, initial_state
+    ):
+        """Evaluator must raise ValueError when sprint_workspace is empty.
+
+        Regression test: the old fallback to codebase_path caused sensors
+        to test the original repo instead of the Generator's output.
+        """
+        state = {
+            **initial_state,
+            "sprint_contract": [
+                {"id": "c1", "description": "test criterion", "status": "FAIL", "evidence": ""}
+            ],
+            "sprint_workspace": "",
+            "codebase_path": str(initial_state["codebase_path"]),
+        }
+
+        evaluator = EvaluatorAgent(mock_llm_client)
+        with pytest.raises(ValueError, match="sprint_workspace is not set"):
+            await evaluator.execute(state)
+
+    def test_sensors_detect_broken_code_in_sprint_workspace(
+        self, toy_repo_path
+    ):
+        """Sensors must test the sprint workspace, not the codebase.
+
+        Creates two directories:
+        - sprint_ws: has a broken test (assert False)
+        - codebase: has passing tests
+
+        If sensors test the wrong directory, they'll return passing results.
+        Only correct behavior is detecting the broken code in sprint_ws.
+        """
+        clean_dir = toy_repo_path / "clean"
+        clean_dir.mkdir()
+        (clean_dir / "test_clean.py").write_text("def test_pass(): assert True\n")
+
+        broken_dir = toy_repo_path / "broken"
+        broken_dir.mkdir()
+        (broken_dir / "test_broken.py").write_text("def test_fail(): assert False\n")
+
+        evaluator = EvaluatorAgent.__new__(EvaluatorAgent)
+
+        clean_results = run_tests(str(clean_dir), allowed_workspace=str(clean_dir))
+        assert clean_results.get("passed", 0) > 0, "Clean tests should pass"
+        assert clean_results.get("failed", 0) == 0, "Clean tests should have no failures"
+
+        broken_results = run_tests(str(broken_dir), allowed_workspace=str(broken_dir))
+        assert broken_results.get("failed", 0) > 0, \
+            "Broken sprint workspace tests should fail — sensors must detect it"
+
+    @pytest.mark.asyncio
+    async def test_happy_path_sensors_target_sprint_workspace(
+        self, mock_llm_client, initial_state
+    ):
+        """Happy path: the path passed to _run_sensors must be the sprint workspace, not codebase_path.
+
+        Regression test: old code passed codebase_path to _run_sensors,
+        making sensors test the original repo instead of Generator's output.
+        """
+        planner = PlannerAgent(mock_llm_client)
+        with patch("src.agents.planner.read_file", return_value="# Conventions"):
+            state1 = await planner.execute(initial_state)
+
+        generator = GeneratorAgent(mock_llm_client)
+        state2 = await generator.execute(state1)
+
+        expected_ws = state2["sprint_workspace"]
+
+        evaluator = EvaluatorAgent(mock_llm_client)
+
+        with patch("src.agents.evaluator.read_file", return_value="# Conventions"):
+            captured_paths = []
+            original_run_sensors = evaluator._run_sensors
+
+            async def capturing_run_sensors(workspace):
+                captured_paths.append(workspace)
+                return await original_run_sensors(workspace)
+
+            evaluator._run_sensors = capturing_run_sensors
+            state3 = await evaluator.execute(state2)
+
+        assert len(captured_paths) == 1, "_run_sensors should be called exactly once"
+        assert captured_paths[0] == expected_ws, \
+            f"Sensors tested '{captured_paths[0]}' but should test sprint workspace '{expected_ws}'"
+        assert captured_paths[0] != initial_state["codebase_path"], \
+            "Sensors must NOT test the original codebase_path"
+
+        assert state3.get("sensor_target") == expected_ws
