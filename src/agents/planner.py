@@ -50,7 +50,16 @@ class PlannerAgent(BaseAgent):
 
         # Parse and validate
         plan = [Step(**s).model_dump() for s in result.get("plan", [])][:self.max_sprints]
-        contract = [Criterion(**c).model_dump() for c in result.get("sprint_contract", [])][:self.max_criteria]
+        raw_contract = result.get("sprint_contract", [])[: self.max_sprints * 10]
+        normalized = []
+        for item in raw_contract:
+            if "sprint_id" in item:
+                try:
+                    item["sprint_id"] = int(item["sprint_id"])
+                except (TypeError, ValueError):
+                    item["sprint_id"] = 1
+            normalized.append(item)
+        contract = [Criterion(**c).model_dump() for c in normalized]
 
         # Ensure all criteria start as FAIL
         for c in contract:

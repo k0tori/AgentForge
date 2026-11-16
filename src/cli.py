@@ -25,6 +25,7 @@ def main(argv: list[str] | None = None) -> None:
         "task_id": state.get("task_id"),
         "final_verdict": state.get("final_verdict"),
         "error": state.get("error"),
+        "result_branch": state.get("result_branch"),
         "trace": state.get("trace"),
     }
     sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n")

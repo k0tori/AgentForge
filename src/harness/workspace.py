@@ -11,7 +11,10 @@ tempdir (no seed) and Evaluator tested the original codebase_path
 from __future__ import annotations
 
 import logging
+import os
+import re
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -26,6 +29,8 @@ class SprintWorkspace:
 
     def __init__(self, codebase_path: str, task_id: str, sprint: int) -> None:
         self.codebase_path = Path(codebase_path)
+        self.task_id = task_id
+        self.sprint = sprint
         self.path = Path(tempfile.gettempdir()) / f"agentforge_sprint_{task_id}_{sprint}"
 
     def create(self, *, force_reseed: bool = True) -> str:
@@ -46,13 +51,91 @@ class SprintWorkspace:
         return str(self.path)
 
     def merge(self) -> None:
-        """PASS 之后：把 workspace 覆盖回 codebase_path，再清理临时目录。"""
+        """Copy the workspace onto the codebase working tree, then delete the temp dir."""
         shutil.copytree(self.path, self.codebase_path, dirs_exist_ok=True, ignore=IGNORE_PATTERNS)
         logger.info("Sprint workspace merged: %s -> %s", self.path, self.codebase_path)
         self.discard()
+
+    def publish(self) -> str:
+        """Commit the workspace onto a new branch. Leave the working tree as it is.
+
+        Returns the branch name. The temp workspace is left in place so the caller
+        can discard it after reading the diff.
+        """
+        if not self.path.is_dir():
+            raise FileNotFoundError(f"Sprint workspace does not exist: {self.path}")
+        branch = _branch_name(self.task_id)
+        self._ensure_repo()
+        worktree = Path(tempfile.mkdtemp(prefix="agentforge_publish_"))
+        try:
+            _git(self.codebase_path, "worktree", "add", "-B", branch, str(worktree), "HEAD")
+            _sync_tree(self.path, worktree)
+            _git(worktree, "add", "-A")
+            status = _git(worktree, "status", "--porcelain", check=False)
+            if status.stdout.strip():
+                _git(worktree, "commit", "-m", f"agentforge: apply task {self.task_id}")
+            logger.info("Published sprint workspace to branch %s", branch)
+            return branch
+        finally:
+            _git(self.codebase_path, "worktree", "remove", "--force", str(worktree), check=False)
+            if worktree.exists():
+                shutil.rmtree(worktree, ignore_errors=True)
+
+    def _ensure_repo(self) -> None:
+        """Make codebase_path its own git root so a parent repo is not modified."""
+        if not (self.codebase_path / ".git").exists():
+            _git(self.codebase_path, "init")
+        if _git(self.codebase_path, "rev-parse", "--verify", "HEAD", check=False).returncode != 0:
+            _git(self.codebase_path, "add", "-A")
+            _git(self.codebase_path, "commit", "--allow-empty", "-m", "agentforge baseline")
 
     def discard(self) -> None:
         """FAIL 或合并完成后：丢弃临时目录。"""
         if self.path.exists():
             shutil.rmtree(self.path, ignore_errors=True)
             logger.info("Sprint workspace discarded: %s", self.path)
+
+
+_SKIP_NAMES = frozenset({".git", "__pycache__", ".pytest_cache", "node_modules", ".venv", "venv"})
+
+
+def _branch_name(task_id: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", task_id).strip("-") or "task"
+    return f"agentforge/{safe}"
+
+
+def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    command = [
+        "git",
+        "-c", "user.email=agentforge@local",
+        "-c", "user.name=AgentForge",
+        "-c", "core.hooksPath=/dev/null",
+        "-c", "init.defaultBranch=main",
+        *args,
+    ]
+    return subprocess.run(command, cwd=cwd, check=check, capture_output=True, text=True)
+
+
+def _sync_tree(source: Path, destination: Path) -> None:
+    """Make destination match source, without touching destination/.git."""
+    kept: set[str] = set()
+    for dirpath, dirnames, filenames in os.walk(source):
+        dirnames[:] = [name for name in dirnames if name not in _SKIP_NAMES and not name.startswith(".")]
+        for filename in filenames:
+            if filename.endswith(".pyc"):
+                continue
+            full = Path(dirpath) / filename
+            relative = full.relative_to(source).as_posix()
+            kept.add(relative)
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(full, target)
+    for dirpath, dirnames, filenames in os.walk(destination):
+        dirnames[:] = [name for name in dirnames if name not in _SKIP_NAMES]
+        for filename in filenames:
+            if filename == ".git":
+                continue
+            full = Path(dirpath) / filename
+            relative = full.relative_to(destination).as_posix()
+            if relative not in kept:
+                full.unlink(missing_ok=True)

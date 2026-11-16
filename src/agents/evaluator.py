@@ -9,6 +9,7 @@ from src.harness.evaluation.rubric import compute_verdict
 from src.tools.file_ops import read_file
 from src.tools.test_ops import run_lint, run_tests
 from src.utils.json_extract import extract_json
+from src.workflow.sprints import active_criteria
 from src.workflow.state import AgentState, Criterion
 
 
@@ -62,10 +63,12 @@ class EvaluatorAgent(BaseAgent):
         """Evaluate code against sprint contract with fresh context isolation."""
         code_diff = state.get("code_diff", "")
         contract = state.get("sprint_contract", [])
+        active = active_criteria(state)
+        active_ids = {c.get("id") for c in active}
         codebase_path = state.get("codebase_path", "./toy-repo")
 
         # CRITICAL: Build isolated input — only code_diff + sprint_contract
-        eval_input = self.fresh_context.build_eval_input(code_diff, contract)
+        eval_input = self.fresh_context.build_eval_input(code_diff, active)
         if not self.fresh_context.validate_no_leakage(eval_input, state):
             raise RuntimeError("Evaluator input includes the generator execution trace")
 
@@ -77,7 +80,7 @@ class EvaluatorAgent(BaseAgent):
             conventions = "No conventions found."
 
         # Build prompt with ONLY the isolated input
-        contract_text = json.dumps(eval_input.sprint_contract, indent=2)
+        contract_text = json.dumps(active, indent=2)
         system = EVALUATOR_SYSTEM_PROMPT.format(conventions=self._truncate(conventions))
         user = EVALUATOR_USER_PROMPT.format(
             code_diff=self._truncate(eval_input.code_diff),
@@ -123,6 +126,9 @@ class EvaluatorAgent(BaseAgent):
         # Update contract statuses
         updated_contract = []
         for criterion in contract:
+            if criterion.get("id") not in active_ids:
+                updated_contract.append(criterion)
+                continue
             c = Criterion(**criterion)
             for eval_criterion in result.get("criteria_results", []):
                 if eval_criterion.get("id") == c.id:
@@ -136,7 +142,9 @@ class EvaluatorAgent(BaseAgent):
         blocking = result.get("blocking_issues", [])
         feedback = result.get("feedback", "")
         eval_feedback = None
-        has_fail = any(c["status"] == "FAIL" for c in updated_contract) or not sensors_passed
+        has_fail = any(
+            c["status"] == "FAIL" for c in updated_contract if c.get("id") in active_ids
+        ) or not sensors_passed
         if has_fail:
             passed = [c for c in updated_contract if c["status"] == "PASS"]
             parts = []

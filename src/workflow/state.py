@@ -21,6 +21,7 @@ class Criterion(BaseModel):
 
     id: str
     description: str
+    sprint_id: int = 1
     status: Literal["FAIL", "PASS"] = "FAIL"
     evidence: str = ""
 
@@ -50,7 +51,9 @@ class AgentState(TypedDict, total=False):
     task_id: str  # Task UUID for tracking
     codebase_path: str  # Path to the target codebase
     sprint_workspace: str  # 本轮 Sprint 的隔离工作目录路径
+    preserve_workspace: bool  # Keep the workspace when advancing to the next sprint
     current_sprint: int  # Current sprint number
+    result_branch: str  # Git branch that received a passing run
     final_verdict: str | None  # Sprint-level verdict (report only, not routing)
     sensors_passed: bool  # pytest and ruff both exited 0; required to end the loop
     error: str | None  # Error message if task failed

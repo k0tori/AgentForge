@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 from src.harness.workspace import SprintWorkspace
@@ -67,6 +68,36 @@ def test_merge_copies_back_to_codebase(tmp_path: Path) -> None:
 
     # Verify temp workspace was cleaned up
     assert not os.path.isdir(workspace_path)
+
+
+def test_publish_commits_a_branch_and_leaves_the_worktree(tmp_path: Path) -> None:
+    """publish() records the workspace on a branch and does not overwrite the checkout."""
+    codebase = tmp_path / "codebase"
+    codebase.mkdir()
+    (codebase / "existing.py").write_text("x = 1")
+
+    ws = SprintWorkspace(str(codebase), "task 42", 1)
+    workspace_path = ws.create()
+    (Path(workspace_path) / "new_module.py").write_text("y = 2")
+    (Path(workspace_path) / "existing.py").write_text("x = 10")
+
+    branch = ws.publish()
+
+    assert branch == "agentforge/task-42"
+    assert (codebase / "existing.py").read_text() == "x = 1"
+    assert not (codebase / "new_module.py").exists()
+    committed = subprocess.check_output(
+        ["git", "-C", str(codebase), "show", f"{branch}:new_module.py"],
+        text=True,
+    )
+    assert committed == "y = 2"
+    updated = subprocess.check_output(
+        ["git", "-C", str(codebase), "show", f"{branch}:existing.py"],
+        text=True,
+    )
+    assert updated == "x = 10"
+
+    ws.discard()
 
 
 def test_discard_removes_workspace(tmp_path: Path) -> None:

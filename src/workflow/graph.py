@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from pathlib import Path
 
 from langgraph.graph import END, StateGraph
 
@@ -27,7 +28,7 @@ from src.llm.client import LLMClient
 from src.retrieval.context import project_path_var
 from src.retrieval.indexer import index_all
 from src.tools.registry import registry
-from src.workflow.edges import handle_escalation, route_after_evaluate
+from src.workflow.edges import handle_escalation, handle_next_sprint, route_after_evaluate
 from src.workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -72,13 +73,7 @@ def _route_and_cleanup(state: AgentState) -> str:
         task_id = state.get("task_id", "default")
         sprint = state.get("current_sprint", 1)
 
-        if route == "end":
-            # All criteria PASS: merge workspace back to codebase
-            workspace = SprintWorkspace(codebase_path, task_id, sprint)
-            workspace.path = type(workspace.path)(sprint_workspace)
-            workspace.merge()
-            logger.info("Sprint %d PASSED — workspace merged", sprint)
-        elif route == "escalate":
+        if route == "escalate":
             # Max retries exceeded: discard workspace
             workspace = SprintWorkspace(codebase_path, task_id, sprint)
             workspace.path = type(workspace.path)(sprint_workspace)
@@ -87,6 +82,28 @@ def _route_and_cleanup(state: AgentState) -> str:
         # route == "generate": keep workspace for next iteration
 
     return route
+
+
+def publish_branch(state: AgentState) -> AgentState:
+    """Commit a passing workspace onto its own branch and drop the temp dir."""
+    sprint_workspace = state.get("sprint_workspace") or ""
+    if not sprint_workspace:
+        return {**state, "result_branch": "", "error": "No sprint workspace to publish", "final_verdict": "FAIL"}
+    workspace = SprintWorkspace(
+        state.get("codebase_path", ""),
+        state.get("task_id", "default"),
+        int(state.get("current_sprint") or 1),
+    )
+    workspace.path = Path(sprint_workspace)
+    try:
+        branch = workspace.publish()
+    except Exception as exc:
+        logger.exception("Failed to publish sprint workspace")
+        return {**state, "error": f"Failed to publish branch: {exc}", "final_verdict": "FAIL"}
+    finally:
+        workspace.discard()
+    logger.info("Published passing run to %s", branch)
+    return {**state, "result_branch": branch, "error": None}
 
 
 def build_graph() -> StateGraph:
@@ -109,6 +126,8 @@ def build_graph() -> StateGraph:
     graph.add_node("generate", observe_node("generator", generator.safe_execute))
     graph.add_node("evaluate", observe_node("evaluator", evaluator.safe_execute))
     graph.add_node("escalate", observe_node("escalate", handle_escalation))
+    graph.add_node("next_sprint", observe_node("next_sprint", handle_next_sprint))
+    graph.add_node("publish", observe_node("publish", publish_branch))
 
     # Add edges
     graph.set_entry_point("plan")
@@ -128,12 +147,15 @@ def build_graph() -> StateGraph:
         "evaluate",
         _route_and_cleanup,
         {
-            "end": END,
+            "end": "publish",
+            "next_sprint": "next_sprint",
             "generate": "generate",
             "escalate": "escalate",
         },
     )
 
+    graph.add_edge("next_sprint", "generate")
+    graph.add_edge("publish", END)
     graph.add_edge("escalate", END)
 
     return graph
@@ -182,6 +204,8 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
         "codebase_path": codebase_path,
         "sprint_workspace": "",
         "current_sprint": 1,
+        "preserve_workspace": False,
+        "result_branch": "",
         "final_verdict": None,
         "sensors_passed": True,
         "error": None,

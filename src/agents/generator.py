@@ -19,6 +19,7 @@ from src.harness.safety.hooks import guard_tool_call
 from src.harness.workspace import SprintWorkspace
 from src.tools.file_ops import read_file
 from src.tools.registry import registry
+from src.workflow.sprints import active_criteria
 from src.workflow.state import AgentState
 
 
@@ -35,7 +36,7 @@ class GeneratorAgent(BaseAgent):
     async def execute(self, state: AgentState) -> AgentState:
         """Implement code to satisfy the sprint contract."""
         sprint_workspace = self._create_sprint_workspace(state)
-        contract = state.get("sprint_contract", [])
+        contract = active_criteria(state)
         plan = state.get("plan", [])
         current_sprint = state.get("current_sprint", 1)
         eval_feedback = state.get("eval_feedback")
@@ -165,7 +166,11 @@ class GeneratorAgent(BaseAgent):
         task_id = state.get("task_id", "default")
         sprint = state.get("current_sprint", 1)
         retry_count = state.get("retry_count", 0)
+        existing = state.get("sprint_workspace") or ""
         workspace = SprintWorkspace(codebase_path, task_id, sprint)
+        if state.get("preserve_workspace") and existing:
+            workspace.path = Path(existing)
+            return workspace.create(force_reseed=False)
         return workspace.create(force_reseed=(retry_count == 0))
 
     @staticmethod

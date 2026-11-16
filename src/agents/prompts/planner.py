@@ -8,6 +8,7 @@ Your job is to analyze the user's request and the existing codebase, then produc
 - Do NOT write implementation details — only high-level steps
 - Maximum 5 sprints, maximum 10 criteria per sprint
 - Each criterion must be specific and verifiable
+- Tag every criterion with sprint_id matching the plan step that must satisfy it
 - Focus on "what" needs to be done, not "how"
 
 ## Output Format
@@ -17,7 +18,7 @@ Return a JSON object with this structure:
     {{"id": 1, "description": "...", "dependencies": []}}
   ],
   "sprint_contract": [
-    {{"id": "c1", "description": "...", "status": "FAIL", "evidence": ""}}
+    {{"id": "c1", "sprint_id": 1, "description": "...", "status": "FAIL", "evidence": ""}}
   ]
 }}
 
