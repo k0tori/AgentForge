@@ -36,7 +36,7 @@ class LLMClient:
             model=settings.DEEPSEEK_MODEL,
             api_key=settings.DEEPSEEK_API_KEY,
             base_url=settings.DEEPSEEK_BASE_URL,
-            temperature=0.1,
+            temperature=settings.TEMPERATURE,
             max_tokens=4096,
         )
 
