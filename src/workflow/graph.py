@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 
 from langgraph.graph import END, StateGraph
 
@@ -18,8 +20,13 @@ from src.agents.evaluator import EvaluatorAgent
 from src.agents.generator import GeneratorAgent
 from src.agents.planner import PlannerAgent
 from src.harness.observability.cost import CostTracker  # noqa: I001
+from src.harness.observability.trace import TraceCollector, TraceSummary, observe_node
+from src.harness.safety.rule_of_two import enforce_tool_set
 from src.harness.workspace import SprintWorkspace
 from src.llm.client import LLMClient
+from src.retrieval.context import project_path_var
+from src.retrieval.indexer import index_all
+from src.tools.registry import registry
 from src.workflow.edges import handle_escalation, route_after_evaluate
 from src.workflow.state import AgentState
 
@@ -88,6 +95,8 @@ def build_graph() -> StateGraph:
     The graph IS the PGE loop (section 3.1):
     plan → generate → evaluate → conditional edge (end/generate/escalate)
     """
+    enforce_tool_set(registry.get_tool_names())
+
     llm = LLMClient()
     planner = PlannerAgent(llm)
     generator = GeneratorAgent(llm)
@@ -96,10 +105,10 @@ def build_graph() -> StateGraph:
     graph = StateGraph(AgentState)
 
     # Add nodes with safe_execute for error handling
-    graph.add_node("plan", planner.safe_execute)
-    graph.add_node("generate", generator.safe_execute)
-    graph.add_node("evaluate", evaluator.safe_execute)
-    graph.add_node("escalate", handle_escalation)
+    graph.add_node("plan", observe_node("planner", planner.safe_execute))
+    graph.add_node("generate", observe_node("generator", generator.safe_execute))
+    graph.add_node("evaluate", observe_node("evaluator", evaluator.safe_execute))
+    graph.add_node("escalate", observe_node("escalate", handle_escalation))
 
     # Add edges
     graph.set_entry_point("plan")
@@ -156,6 +165,10 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
     logger.info("Starting task %s", task_id)
 
     cost_tracker = CostTracker()
+    collector = TraceCollector()
+    collector.start_trace(task_id)
+    started = time.perf_counter()
+    project_token = project_path_var.set(os.path.abspath(codebase_path))
 
     initial_state: AgentState = {
         "request": request,
@@ -173,11 +186,29 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
         "sensors_passed": True,
         "error": None,
         "cost_tracker": cost_tracker,
+        "trace_collector": collector,
     }
 
-    graph = get_compiled_graph()
-    final_state = await graph.ainvoke(initial_state)
-    final_state["cost_breakdown"] = cost_tracker.get_breakdown()
+    try:
+        await index_all(codebase_path)
+        graph = get_compiled_graph()
+        final_state = await graph.ainvoke(initial_state)
+    finally:
+        project_path_var.reset(project_token)
+
+    breakdown = cost_tracker.get_breakdown()
+    final_state["cost_breakdown"] = breakdown
+    verdict = final_state.get("final_verdict") or ""
+    collector.finalize(TraceSummary(
+        total_steps=len(collector.timeline),
+        total_duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
+        total_tokens=breakdown.get("total", {}).get("tokens", 0),
+        sprints_completed=1 if verdict.startswith("PASS") and not final_state.get("error") else 0,
+        sprint_retries=final_state.get("retry_count") or 0,
+        final_verdict=verdict or ("FAIL" if final_state.get("error") else ""),
+    ))
+    final_state["trace"] = collector.to_dict()
+    final_state.pop("trace_collector", None)
 
     if final_state.get("error"):
         logger.error("Task %s failed: %s", task_id, final_state["error"])

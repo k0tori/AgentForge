@@ -56,3 +56,5 @@ class AgentState(TypedDict, total=False):
     error: str | None  # Error message if task failed
     cost_tracker: object  # CostTracker instance (typed as object to avoid circular import)
     cost_breakdown: dict  # Serialized per-role cost breakdown for API response
+    trace_collector: object  # Live TraceCollector for this run
+    trace: dict  # Serialized execution trace returned to API clients

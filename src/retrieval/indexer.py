@@ -5,8 +5,11 @@ Indexes Python code into code_embeddings and CONVENTIONS.md into best_practice_e
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+
+from sqlalchemy import text
 
 from src.config import settings
 from src.retrieval.chunking import chunk_directory, split_markdown_sections
@@ -15,6 +18,17 @@ from src.storage.database import async_session_factory
 from src.storage.vector import delete_best_practice_embeddings, delete_by_project_path, insert_embedding
 
 logger = logging.getLogger(__name__)
+
+
+async def storage_available() -> bool:
+    """Return whether PostgreSQL accepts a connection. Does not load the embedding model."""
+    try:
+        async with async_session_factory() as session:
+            await session.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        logger.warning("Vector database is not reachable; skipping index")
+        return False
 
 
 async def index_directory(directory: str | None = None, project_path: str | None = None) -> int:
@@ -42,7 +56,7 @@ async def index_directory(directory: str | None = None, project_path: str | None
 
     # 2. Generate embeddings in batch
     texts = [c.content for c in chunks]
-    embeddings = embedding_generator.generate_embeddings(texts)
+    embeddings = await asyncio.to_thread(embedding_generator.generate_embeddings, texts)
     logger.info("Generated %d embeddings", len(embeddings))
 
     # 3. Clear old records and insert new ones
@@ -98,7 +112,9 @@ async def index_conventions(directory: str | None = None) -> int:
         logger.warning("CONVENTIONS.md at %s is empty", conventions_path)
         return 0
 
-    embeddings = embedding_generator.generate_embeddings([body for _, body in sections])
+    embeddings = await asyncio.to_thread(
+        embedding_generator.generate_embeddings, [body for _, body in sections]
+    )
 
     async with async_session_factory() as session:
         await delete_best_practice_embeddings(session, source="CONVENTIONS.md")
@@ -127,6 +143,8 @@ async def index_all(directory: str | None = None) -> dict[str, int]:
     Returns:
         Dict with counts: {"code_chunks": N, "conventions": M}.
     """
+    if not await storage_available():
+        return {"code_chunks": 0, "conventions": 0}
     code_count = await index_directory(directory)
     conv_count = await index_conventions(directory)
     return {"code_chunks": code_count, "conventions": conv_count}

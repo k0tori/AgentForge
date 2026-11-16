@@ -66,6 +66,8 @@ class EvaluatorAgent(BaseAgent):
 
         # CRITICAL: Build isolated input — only code_diff + sprint_contract
         eval_input = self.fresh_context.build_eval_input(code_diff, contract)
+        if not self.fresh_context.validate_no_leakage(eval_input, state):
+            raise RuntimeError("Evaluator input includes the generator execution trace")
 
         # Read conventions
         conventions_path = f"{codebase_path}/CONVENTIONS.md"

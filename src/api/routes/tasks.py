@@ -103,6 +103,7 @@ async def _execute_task(task_id: uuid.UUID, intent: str, codebase_path: str) -> 
             "code_diff": result.get("code_diff", ""),
             "execution_trace_summary": len(result.get("execution_trace", [])),
             "cost_breakdown": result.get("cost_breakdown", {}),
+            "trace": result.get("trace"),
         })
 
     except Exception as e:

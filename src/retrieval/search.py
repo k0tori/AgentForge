@@ -5,9 +5,11 @@ merges results sorted by cosine similarity.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 
 from src.retrieval.embeddings import embedding_generator
+from src.storage.cache import get_retrieval_cache, set_retrieval_cache
 from src.storage.database import async_session_factory
 from src.storage.vector import search_similar
 
@@ -26,6 +28,16 @@ async def search(query: str, top_k: int = 5, project_path: str | None = None) ->
         Each dict contains: id, content, similarity, chunk_type, chunk_name,
         file_path, source_table.
     """
+    cache_key = hashlib.sha256(f"{project_path or ''}|{top_k}|{query}".encode()).hexdigest()
+    try:
+        cached = await get_retrieval_cache(cache_key)
+    except Exception:
+        logger.debug("Retrieval cache read failed", exc_info=True)
+        cached = None
+    if cached is not None:
+        logger.info("Search '%s' cache hit (%d results)", query[:50], len(cached))
+        return cached
+
     # 1. Generate query embedding
     query_embedding = embedding_generator.generate_embedding(query)
 
@@ -67,4 +79,8 @@ async def search(query: str, top_k: int = 5, project_path: str | None = None) ->
 
     logger.info("Search '%s' returned %d results (code=%d, practice=%d)",
                 query[:50], len(results), len(code_results), len(practice_results))
+    try:
+        await set_retrieval_cache(cache_key, results)
+    except Exception:
+        logger.debug("Retrieval cache write failed", exc_info=True)
     return results

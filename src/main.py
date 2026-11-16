@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 from collections.abc import AsyncGenerator
@@ -50,16 +51,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_db()
     await init_vector_tables()
 
-    # Index toy-repo for RAG (non-blocking, logs results)
-    try:
-        from src.retrieval.indexer import index_all
-        result = await index_all()
-        logger.info("RAG indexing complete: %s", result)
-    except Exception:
-        logger.exception("RAG indexing failed (non-fatal)")
+    async def _index_background() -> None:
+        try:
+            from src.retrieval.indexer import index_all
+            result = await index_all()
+            logger.info("RAG indexing complete: %s", result)
+        except Exception:
+            logger.exception("RAG indexing failed (non-fatal)")
 
+    app.state.index_task = asyncio.create_task(_index_background())
     logger.info("AgentForge application started")
     yield
+    index_task = getattr(app.state, "index_task", None)
+    if index_task is not None:
+        index_task.cancel()
     logger.info("Shutting down AgentForge application")
     await close_redis()
 
