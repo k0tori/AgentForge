@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.workflow.state import AgentState, Criterion, Step
+from src.workflow.state import Criterion, Step
 
 
 def test_criterion_default_is_fail():

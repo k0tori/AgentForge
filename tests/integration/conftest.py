@@ -12,7 +12,6 @@ from langchain_core.messages import AIMessage
 from src.llm.client import LLMClient
 from src.workflow.state import AgentState
 
-
 # Fixture paths
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 MOCKS_DIR = Path(__file__).parent / "mocks"
