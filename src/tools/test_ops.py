@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from src.harness.safety.hooks import is_within_workspace
@@ -28,9 +29,21 @@ def run_tests(path: str, test_file: str | None = None, allowed_workspace: str | 
     _validate_path(path, allowed_workspace)
     p = Path(path)
 
-    cmd = ["python", "-m", "pytest", "-v", "--tb=short"]
+    cmd = [sys.executable, "-m", "pytest", "-v", "--tb=short"]
     if test_file:
-        cmd.append(test_file)
+        if str(test_file).startswith("-"):
+            return {
+                "passed": 0,
+                "failed": 0,
+                "exit_code": 2,
+                "output": "Refusing pytest option passed as test_file",
+            }
+        candidate = Path(test_file)
+        if not candidate.is_absolute():
+            candidate = p / candidate
+        if allowed_workspace and not is_within_workspace(str(candidate), allowed_workspace):
+            raise PermissionError(f"test_file '{test_file}' is outside allowed workspace")
+        cmd.append(str(candidate))
 
     try:
         result = subprocess.run(
@@ -78,7 +91,7 @@ def run_lint(path: str, allowed_workspace: str | None = None) -> dict:
 
     try:
         result = subprocess.run(
-            ["python", "-m", "ruff", "check", "--output-format=text", "."],
+            [sys.executable, "-m", "ruff", "check", "--output-format=text", "."],
             cwd=str(p),
             capture_output=True,
             text=True,

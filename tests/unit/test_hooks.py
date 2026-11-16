@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from src.harness.safety.hooks import pre_write_hook
-
+from src.harness.safety.hooks import guard_tool_call, pre_write_hook
 
 WORKSPACE = "/tmp/test_sprint_workspace"
 
@@ -38,3 +37,35 @@ def test_pem_file_rejected():
     """PEM key files should be rejected."""
     result = pre_write_hook(f"{WORKSPACE}/server.pem", "key content", WORKSPACE)
     assert result.exit_code == 2
+
+
+def test_guard_blocks_reads_outside_codebase():
+    """Reads must stay inside the codebase or the sprint workspace."""
+    result = guard_tool_call(
+        "read_file",
+        {"path": "/etc/passwd"},
+        sprint_workspace=WORKSPACE,
+        codebase_path=WORKSPACE,
+    )
+    assert result.exit_code == 2
+
+
+def test_guard_blocks_pytest_options():
+    """test_file cannot smuggle pytest flags."""
+    result = guard_tool_call(
+        "run_tests",
+        {"path": WORKSPACE, "test_file": "--override-ini=addopts="},
+        sprint_workspace=WORKSPACE,
+        codebase_path=WORKSPACE,
+    )
+    assert result.exit_code == 2
+
+
+def test_guard_allows_workspace_write():
+    result = guard_tool_call(
+        "write_file",
+        {"path": f"{WORKSPACE}/src/tag.py", "content": "x = 1"},
+        sprint_workspace=WORKSPACE,
+        codebase_path="/tmp/other-codebase",
+    )
+    assert result.exit_code == 0

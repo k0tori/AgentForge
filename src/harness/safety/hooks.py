@@ -21,8 +21,14 @@ SECRET_PATTERNS = (".env", ".env.", ".key", ".pem", ".p12", ".pfx", "id_rsa", "i
 
 def is_system_file(file_path: str) -> bool:
     """Check if the path points to a system file."""
-    normalized = Path(file_path).resolve().as_posix()
-    return any(normalized.startswith(sp) for sp in SYSTEM_PATHS)
+    resolved = Path(file_path).resolve()
+    for system_path in SYSTEM_PATHS:
+        try:
+            resolved.relative_to(system_path)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def is_secret_file(file_path: str) -> bool:
@@ -72,3 +78,49 @@ def pre_write_hook(file_path: str, content: str, sprint_workspace: str) -> HookR
         )
 
     return HookResult(exit_code=0)
+
+
+def guard_tool_call(
+    tool_name: str,
+    tool_args: dict,
+    *,
+    sprint_workspace: str,
+    codebase_path: str,
+) -> HookResult:
+    """Confine tool paths to the sprint workspace and the source codebase.
+
+    Writes and test/lint runs stay inside the sprint workspace. Reads may also
+    use the original codebase. Secret files are rejected for every operation.
+    """
+    read_tools = {"read_file", "list_directory", "search_code"}
+    exec_tools = {"run_tests", "run_lint"}
+    path = str(tool_args.get("path", ""))
+
+    if tool_name == "write_file":
+        return pre_write_hook(path, str(tool_args.get("content", "")), sprint_workspace)
+
+    if tool_name not in read_tools and tool_name not in exec_tools:
+        return HookResult(exit_code=0)
+
+    if not path:
+        return HookResult(exit_code=2, reason="Missing path")
+    if is_secret_file(path) or is_system_file(path):
+        return HookResult(exit_code=2, reason="Cannot access secret or system files")
+
+    if tool_name in exec_tools:
+        if not is_within_workspace(path, sprint_workspace):
+            return HookResult(exit_code=2, reason="Tests and lint must run inside the sprint workspace")
+        test_file = tool_args.get("test_file")
+        if test_file:
+            test_path = Path(str(test_file))
+            if str(test_file).startswith("-"):
+                return HookResult(exit_code=2, reason="test_file must be a path, not a pytest option")
+            if not test_path.is_absolute():
+                test_path = Path(sprint_workspace) / test_path
+            if not is_within_workspace(str(test_path), sprint_workspace):
+                return HookResult(exit_code=2, reason="test_file must stay inside the sprint workspace")
+        return HookResult(exit_code=0)
+
+    if is_within_workspace(path, sprint_workspace) or is_within_workspace(path, codebase_path):
+        return HookResult(exit_code=0)
+    return HookResult(exit_code=2, reason="Path is outside the codebase and sprint workspace")
