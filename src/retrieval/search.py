@@ -14,7 +14,7 @@ from src.storage.vector import search_similar
 logger = logging.getLogger(__name__)
 
 
-async def search(query: str, top_k: int = 5) -> list[dict]:
+async def search(query: str, top_k: int = 5, project_path: str | None = None) -> list[dict]:
     """Search code and best practices for relevant context.
 
     Args:
@@ -32,7 +32,7 @@ async def search(query: str, top_k: int = 5) -> list[dict]:
     # 2. Search both tables
     async with async_session_factory() as session:
         code_results = await search_similar(
-            session, "code_embeddings", query_embedding, top_k=top_k
+            session, "code_embeddings", query_embedding, top_k=top_k, project_path=project_path
         )
         practice_results = await search_similar(
             session, "best_practice_embeddings", query_embedding, top_k=top_k

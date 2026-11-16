@@ -32,8 +32,11 @@ class EmbeddingGenerator:
     def get_dimension(self) -> int:
         """Return the embedding dimension."""
         self._ensure_model()
-        # type: ignore[union-attr]
-        return self._model.get_sentence_embedding_dimension()
+        model = self._model
+        getter = getattr(model, "get_embedding_dimension", None) or getattr(
+            model, "get_sentence_embedding_dimension"
+        )
+        return int(getter())
 
     def generate_embedding(self, text: str) -> list[float]:
         """Generate embedding for a single text.

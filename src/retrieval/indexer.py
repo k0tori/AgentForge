@@ -9,7 +9,7 @@ import logging
 import os
 
 from src.config import settings
-from src.retrieval.chunking import chunk_directory
+from src.retrieval.chunking import chunk_directory, split_markdown_sections
 from src.retrieval.embeddings import embedding_generator
 from src.storage.database import async_session_factory
 from src.storage.vector import delete_best_practice_embeddings, delete_by_project_path, insert_embedding
@@ -77,7 +77,7 @@ async def index_conventions(directory: str | None = None) -> int:
         directory: Directory containing CONVENTIONS.md. Defaults to settings.TOY_REPO_PATH.
 
     Returns:
-        Number of entries indexed (0 or 1).
+        Number of sections indexed.
     """
     directory = os.path.abspath(directory or settings.TOY_REPO_PATH)
     conventions_path = os.path.join(directory, "CONVENTIONS.md")
@@ -93,23 +93,29 @@ async def index_conventions(directory: str | None = None) -> int:
         logger.exception("Failed to read CONVENTIONS.md")
         return 0
 
-    embedding = embedding_generator.generate_embedding(content)
+    sections = split_markdown_sections(content)
+    if not sections:
+        logger.warning("CONVENTIONS.md at %s is empty", conventions_path)
+        return 0
+
+    embeddings = embedding_generator.generate_embeddings([body for _, body in sections])
 
     async with async_session_factory() as session:
-        await delete_best_practice_embeddings(session)
-        await insert_embedding(
-            session,
-            table="best_practice_embeddings",
-            content=content,
-            embedding=embedding,
-            category="architecture",
-            title="Project Coding Conventions",
-            source="CONVENTIONS.md",
-        )
+        await delete_best_practice_embeddings(session, source="CONVENTIONS.md")
+        for (title, body), embedding in zip(sections, embeddings, strict=True):
+            await insert_embedding(
+                session,
+                table="best_practice_embeddings",
+                content=body,
+                embedding=embedding,
+                category="architecture",
+                title=title,
+                source="CONVENTIONS.md",
+            )
         await session.commit()
 
-    logger.info("Indexed CONVENTIONS.md into best_practice_embeddings")
-    return 1
+    logger.info("Indexed %d CONVENTIONS.md sections into best_practice_embeddings", len(sections))
+    return len(sections)
 
 
 async def index_all(directory: str | None = None) -> dict[str, int]:
