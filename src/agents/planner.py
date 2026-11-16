@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from src.agents.base import BaseAgent
 from src.agents.prompts.planner import PLANNER_SYSTEM_PROMPT, PLANNER_USER_PROMPT
 from src.harness.context.disclosure import ProgressiveDisclosure
@@ -64,4 +62,5 @@ class PlannerAgent(BaseAgent):
             "plan": plan,
             "sprint_contract": contract,
             "current_sprint": 1,
+            "error": None,
         }

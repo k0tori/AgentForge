@@ -38,6 +38,32 @@ def test_fail_max_retries_routes_to_escalate():
     assert route_after_evaluate(state) == "escalate"
 
 
+def test_empty_contract_escalates():
+    """An empty contract must not count as all-pass."""
+    state = {"sprint_contract": [], "retry_count": 0}
+    assert route_after_evaluate(state) == "escalate"
+
+
+def test_sensor_failure_retries_even_if_criteria_pass():
+    """pytest/ruff failure blocks a merge while retries remain."""
+    state = {
+        "sprint_contract": [{"id": "c1", "status": "PASS"}],
+        "retry_count": 0,
+        "sensors_passed": False,
+    }
+    assert route_after_evaluate(state) == "generate"
+
+
+def test_agent_error_escalates_instead_of_merging():
+    """A node error must not take the merge path."""
+    state = {
+        "sprint_contract": [{"id": "c1", "status": "PASS"}],
+        "retry_count": 0,
+        "error": "PlannerAgent failed: bad json",
+    }
+    assert route_after_evaluate(state) == "escalate"
+
+
 def test_escalation_produces_error():
     """Escalation handler produces a structured error."""
     state = {

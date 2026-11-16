@@ -12,6 +12,41 @@ from src.utils.json_extract import extract_json
 from src.workflow.state import AgentState, Criterion
 
 
+def assess_sensors(sensor_results: dict) -> tuple[bool, str]:
+    """Return whether pytest and ruff both ran cleanly, plus a short explanation."""
+    if sensor_results.get("error") and "tests" not in sensor_results:
+        return False, f"Sensors failed to run: {sensor_results['error']}"
+
+    notes: list[str] = []
+    ok = True
+
+    tests = sensor_results.get("tests")
+    if not isinstance(tests, dict):
+        ok = False
+        notes.append("Tests did not run.")
+    else:
+        exit_code = tests.get("exit_code", 1)
+        failed = int(tests.get("failed", 0) or 0)
+        if exit_code != 0 or failed:
+            ok = False
+            notes.append(
+                f"Tests failed (exit={exit_code}, passed={tests.get('passed', 0)}, failed={failed})."
+            )
+            output = tests.get("output") or ""
+            if output:
+                notes.append(str(output)[-1500:])
+
+    lint = sensor_results.get("lint")
+    if not isinstance(lint, dict):
+        ok = False
+        notes.append("Lint did not run.")
+    elif lint.get("exit_code", 1) != 0:
+        ok = False
+        notes.append(f"Lint failed (exit={lint.get('exit_code')}, issues={lint.get('issue_count', 0)}).")
+
+    return ok, "\n".join(notes)
+
+
 class EvaluatorAgent(BaseAgent):
     """Evaluator: independently evaluates code against the sprint contract.
 
@@ -52,16 +87,28 @@ class EvaluatorAgent(BaseAgent):
         sprint_workspace = state.get("sprint_workspace", codebase_path)
         sensor_results = await self._run_sensors(sprint_workspace)
 
-        # Append sensor results to user message
+        sensors_passed, sensor_detail = assess_sensors(sensor_results)
+
+        # Append sensor results to user message. Exit codes are included so a
+        # collection error (0 passed, 0 failed, non-zero exit) is visible.
         sensor_info = ""
         if "tests" in sensor_results:
             test_res = sensor_results["tests"]
-            passed = test_res.get("passed", 0)
-            failed = test_res.get("failed", 0)
-            sensor_info += f"\n\n## Independent Test Results\nPassed: {passed}, Failed: {failed}"
+            sensor_info += (
+                "\n\n## Independent Test Results\n"
+                f"Passed: {test_res.get('passed', 0)}, Failed: {test_res.get('failed', 0)}, "
+                f"Exit code: {test_res.get('exit_code', 'missing')}"
+            )
         if "lint" in sensor_results:
             lint_res = sensor_results["lint"]
-            sensor_info += f"\n\n## Independent Lint Results\nIssues: {lint_res.get('issue_count', 0)}"
+            sensor_info += (
+                "\n\n## Independent Lint Results\n"
+                f"Issues: {lint_res.get('issue_count', 0)}, Exit code: {lint_res.get('exit_code', 'missing')}"
+            )
+        if sensor_results.get("error"):
+            sensor_info += f"\n\n## Sensor Error\n{sensor_results['error']}"
+        if not sensors_passed and sensor_detail:
+            sensor_info += f"\n\n## Sensor Gate\n{sensor_detail}"
 
         user += sensor_info
         messages = self._build_messages(system, user)
@@ -77,7 +124,8 @@ class EvaluatorAgent(BaseAgent):
             c = Criterion(**criterion)
             for eval_criterion in result.get("criteria_results", []):
                 if eval_criterion.get("id") == c.id:
-                    c.status = eval_criterion.get("status", "FAIL")
+                    raw_status = eval_criterion.get("status", "FAIL")
+                    c.status = raw_status if raw_status in ("PASS", "FAIL") else "FAIL"
                     c.evidence = eval_criterion.get("evidence", "")
                     break
             updated_contract.append(c.model_dump())
@@ -86,7 +134,7 @@ class EvaluatorAgent(BaseAgent):
         blocking = result.get("blocking_issues", [])
         feedback = result.get("feedback", "")
         eval_feedback = None
-        has_fail = any(c["status"] == "FAIL" for c in updated_contract)
+        has_fail = any(c["status"] == "FAIL" for c in updated_contract) or not sensors_passed
         if has_fail:
             passed = [c for c in updated_contract if c["status"] == "PASS"]
             parts = []
@@ -94,6 +142,8 @@ class EvaluatorAgent(BaseAgent):
                 parts.append("Already passing (DO NOT break these):\n" + json.dumps(passed, indent=2))
             parts.append("Issues found:\n" + json.dumps(blocking, indent=2))
             parts.append("Feedback:\n" + feedback)
+            if not sensors_passed:
+                parts.append("Computational sensors failed:\n" + sensor_detail)
             eval_feedback = "\n\n".join(parts)
 
         # Compute sprint-level verdict (for report only, not routing)
@@ -111,6 +161,8 @@ class EvaluatorAgent(BaseAgent):
             "eval_feedback": eval_feedback,
             "final_verdict": sprint_verdict,
             "retry_count": retry_count,
+            "sensors_passed": sensors_passed,
+            "error": None,
         }
 
     async def _run_sensors(self, sprint_workspace: str) -> dict:

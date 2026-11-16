@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from src.harness.loop.controller import LoopController
 
 
@@ -30,6 +32,22 @@ def test_repeat_detection():
     assert ctrl.should_force_strategy_change(action_hash) is False
     ctrl.record_action(action_hash)
     assert ctrl.should_force_strategy_change(action_hash) is True
+
+
+def test_reset_run_clears_timeout_and_repeats():
+    """Each generator attempt gets a fresh timeout and repeat history."""
+    ctrl = LoopController(timeout_seconds=10, repeat_threshold=3)
+    ctrl._start_time = time.time() - 100
+    assert ctrl.check_timeout() is False
+    action = LoopController.hash_action("read_file", {"path": "/tmp/a.py"})
+    for _ in range(3):
+        ctrl.record_action(action)
+    assert ctrl.should_force_strategy_change(action) is True
+
+    ctrl.reset_run(current_tokens=5)
+    assert ctrl.check_timeout() is True
+    assert ctrl.should_force_strategy_change(action) is False
+    assert ctrl.check_token_budget(5) is True
 
 
 def test_hash_action_deterministic():

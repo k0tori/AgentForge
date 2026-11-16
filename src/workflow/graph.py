@@ -12,6 +12,7 @@ from langgraph.graph import END, StateGraph
 # available when the LLM requests tool schemas.
 import src.tools.code_ops  # noqa: F401
 import src.tools.file_ops  # noqa: F401
+import src.tools.retrieval_ops  # noqa: F401
 import src.tools.test_ops  # noqa: F401
 from src.agents.evaluator import EvaluatorAgent
 from src.agents.generator import GeneratorAgent
@@ -23,6 +24,35 @@ from src.workflow.edges import handle_escalation, route_after_evaluate
 from src.workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
+
+
+def _discard_workspace(state: AgentState) -> None:
+    """Drop a sprint workspace when the run stops without a passing merge."""
+    sprint_workspace = state.get("sprint_workspace") or ""
+    if not sprint_workspace:
+        return
+    workspace = SprintWorkspace(
+        state.get("codebase_path", ""),
+        state.get("task_id", "default"),
+        state.get("current_sprint", 1),
+    )
+    workspace.path = type(workspace.path)(sprint_workspace)
+    workspace.discard()
+
+
+def _route_after_plan(state: AgentState) -> str:
+    """Stop the graph when planning fails. There is no workspace to merge yet."""
+    if state.get("error"):
+        return "end"
+    return "generate"
+
+
+def _route_after_generate(state: AgentState) -> str:
+    """Stop without merging when generation fails after a workspace was created."""
+    if state.get("error"):
+        _discard_workspace(state)
+        return "end"
+    return "evaluate"
 
 
 def _route_and_cleanup(state: AgentState) -> str:
@@ -73,8 +103,16 @@ def build_graph() -> StateGraph:
 
     # Add edges
     graph.set_entry_point("plan")
-    graph.add_edge("plan", "generate")
-    graph.add_edge("generate", "evaluate")
+    graph.add_conditional_edges(
+        "plan",
+        _route_after_plan,
+        {"generate": "generate", "end": END},
+    )
+    graph.add_conditional_edges(
+        "generate",
+        _route_after_generate,
+        {"evaluate": "evaluate", "end": END},
+    )
 
     # Conditional routing after evaluation (with workspace cleanup)
     graph.add_conditional_edges(
@@ -132,6 +170,7 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
         "sprint_workspace": "",
         "current_sprint": 1,
         "final_verdict": None,
+        "sensors_passed": True,
         "error": None,
         "cost_tracker": cost_tracker,
     }
