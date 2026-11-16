@@ -9,7 +9,7 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """Task execution status."""
 
     PENDING = "pending"
@@ -135,7 +135,7 @@ class TaskManager:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
                 yield event
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Send heartbeat
                 yield TaskEvent(event="heartbeat", data={"task_id": str(task_id)})
 

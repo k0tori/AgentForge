@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -33,7 +34,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 
         # Check for API key in header
         api_key = request.headers.get("X-API-Key")
-        if api_key != settings.API_KEY:
+        if api_key is None or not hmac.compare_digest(api_key.encode(), settings.API_KEY.encode()):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing API key"},
@@ -73,8 +74,8 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to specific origins
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
