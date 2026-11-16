@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import secrets
 import uuid
 
 from sqlalchemy import select
@@ -10,13 +12,24 @@ from src.models.user import User
 from src.schemas.user import UserCreate, UserUpdate
 
 
+def hash_password(password: str) -> str:
+    """Hash a password with PBKDF2-HMAC-SHA256. The stored value is not the plaintext."""
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 100_000).hex()
+    return f"pbkdf2_sha256$100000${salt}${digest}"
+
+
 async def create_user(session: AsyncSession, data: UserCreate) -> User:
     existing = await session.execute(
         select(User).where((User.username == data.username) | (User.email == data.email))
     )
     if existing.scalar_one_or_none() is not None:
         raise ConflictError("Username or email already exists")
-    user = User(username=data.username, email=data.email, hashed_password=data.password)
+    user = User(
+        username=data.username,
+        email=data.email,
+        hashed_password=hash_password(data.password),
+    )
     session.add(user)
     await session.flush()
     await session.refresh(user)
@@ -48,9 +61,13 @@ async def update_user(session: AsyncSession, user_id: uuid.UUID, data: UserUpdat
             conditions.append(User.username == update_data["username"])
         if "email" in update_data:
             conditions.append(User.email == update_data["email"])
-        existing = await session.execute(select(User).where(or_(*conditions)).where(User.id != user_id))
+        existing = await session.execute(
+            select(User).where(or_(*conditions)).where(User.id != user_id)
+        )
         if existing.scalar_one_or_none() is not None:
             raise ConflictError("Username or email already exists")
+    if "password" in update_data:
+        update_data["hashed_password"] = hash_password(update_data.pop("password"))
     for field, value in update_data.items():
         setattr(user, field, value)
     await session.flush()

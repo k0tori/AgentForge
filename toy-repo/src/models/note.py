@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlmodel import Field, SQLModel
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 class Note(SQLModel, table=True):
@@ -15,5 +19,5 @@ class Note(SQLModel, table=True):
     title: str = Field(max_length=200)
     content: str = Field(default="")
     owner_id: uuid.UUID = Field(foreign_key="users.id", index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
