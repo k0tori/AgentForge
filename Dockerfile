@@ -9,6 +9,7 @@ RUN apt-get update \
 COPY pyproject.toml ./
 COPY src ./src
 COPY toy-repo ./toy-repo
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 
 # Install CPU torch before the project so sentence-transformers does not pull CUDA wheels.
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \

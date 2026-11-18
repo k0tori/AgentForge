@@ -16,6 +16,7 @@ from src.agents.prompts.generator import (
 )
 from src.harness.loop.controller import LoopController
 from src.harness.safety.hooks import guard_tool_call
+from src.harness.sandbox.session import sandbox_session
 from src.harness.workspace import SprintWorkspace
 from src.tools.file_ops import read_file
 from src.tools.registry import registry
@@ -36,6 +37,12 @@ class GeneratorAgent(BaseAgent):
     async def execute(self, state: AgentState) -> AgentState:
         """Implement code to satisfy the sprint contract."""
         sprint_workspace = self._create_sprint_workspace(state)
+        task_id = str(state.get("task_id") or "task")
+        with sandbox_session(sprint_workspace, task_id=task_id, role="generate"):
+            return await self._generate(state, sprint_workspace)
+
+    async def _generate(self, state: AgentState, sprint_workspace: str) -> AgentState:
+        """Tool loop for one sprint. pytest and ruff run in the active sandbox."""
         contract = active_criteria(state)
         plan = state.get("plan", [])
         current_sprint = state.get("current_sprint", 1)

@@ -6,6 +6,7 @@ from src.agents.base import BaseAgent
 from src.agents.prompts.evaluator import EVALUATOR_SYSTEM_PROMPT, EVALUATOR_USER_PROMPT
 from src.harness.evaluation.fresh_context import FreshContextEvaluator
 from src.harness.evaluation.rubric import compute_verdict
+from src.harness.sandbox.session import sandbox_session
 from src.tools.file_ops import read_file
 from src.tools.test_ops import run_lint, run_tests
 from src.utils.json_extract import extract_json
@@ -90,7 +91,9 @@ class EvaluatorAgent(BaseAgent):
         # Run computational sensors independently — test the sprint workspace,
         # not the original codebase, so results reflect Generator's actual changes.
         sprint_workspace = state.get("sprint_workspace", codebase_path)
-        sensor_results = await self._run_sensors(sprint_workspace)
+        task_id = str(state.get("task_id") or "task")
+        with sandbox_session(sprint_workspace, task_id=task_id, role="evaluate"):
+            sensor_results = await self._run_sensors(sprint_workspace)
 
         sensors_passed, sensor_detail = assess_sensors(sensor_results)
 

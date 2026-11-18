@@ -3,9 +3,14 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
+from src.config import settings
 from src.harness.safety.hooks import is_within_workspace
+from src.harness.sandbox.errors import SandboxUnavailableError
+from src.harness.sandbox.runtime import execute_in_docker, warn_host_mode_once
+from src.harness.sandbox.session import current_session
 from src.tools.registry import registry
 
 # Truncation limits for tool output
@@ -24,12 +29,41 @@ def _validate_path(path: str, allowed_workspace: str | None) -> None:
         )
 
 
+def _container_target(path: Path, workspace: Path) -> str:
+    """Workspace-relative path used inside the container. Host absolute paths stay on the host."""
+    relative = path.resolve().relative_to(workspace.resolve())
+    return relative.as_posix() or "."
+
+
+def _invoke(argv: list[str], workspace: Path, timeout: int) -> subprocess.CompletedProcess[str] | object:
+    """Run argv in Docker, or on the host only when SANDBOX_MODE=host."""
+    mode = settings.SANDBOX_MODE.strip().lower()
+    if mode == "host":
+        warn_host_mode_once()
+        host_argv = [sys.executable, *argv[1:]]
+        return subprocess.run(
+            host_argv,
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    if mode != "docker":
+        raise SandboxUnavailableError(
+            f"Unknown SANDBOX_MODE={settings.SANDBOX_MODE!r}. Use 'docker' or the explicit 'host' opt-in."
+        )
+    session = current_session()
+    attempt_id = session.attempt_id if session is not None else f"exec-{uuid.uuid4().hex[:8]}"
+    return execute_in_docker(argv, workspace=str(workspace), timeout=timeout, attempt_id=attempt_id)
+
+
 def run_tests(path: str, test_file: str | None = None, allowed_workspace: str | None = None) -> dict:
     """Execute pytest in the given directory. Returns pass/fail counts and output."""
     _validate_path(path, allowed_workspace)
     p = Path(path)
 
-    cmd = [sys.executable, "-m", "pytest", "-v", "--tb=short"]
+    cmd = ["python", "-m", "pytest", "-v", "--tb=short"]
     if test_file:
         if str(test_file).startswith("-"):
             return {
@@ -43,16 +77,10 @@ def run_tests(path: str, test_file: str | None = None, allowed_workspace: str | 
             candidate = p / candidate
         if allowed_workspace and not is_within_workspace(str(candidate), allowed_workspace):
             raise PermissionError(f"test_file '{test_file}' is outside allowed workspace")
-        cmd.append(str(candidate))
+        cmd.append(_container_target(candidate, p))
 
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(p),
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        result = _invoke(cmd, p, timeout=120)
         output = result.stdout + result.stderr
 
         # Parse pytest summary line (more robust than counting occurrences)
@@ -90,11 +118,9 @@ def run_lint(path: str, allowed_workspace: str | None = None) -> dict:
     p = Path(path)
 
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "ruff", "check", "--output-format=text", "."],
-            cwd=str(p),
-            capture_output=True,
-            text=True,
+        result = _invoke(
+            ["python", "-m", "ruff", "check", "--output-format=text", "."],
+            p,
             timeout=30,
         )
         issues = [line for line in result.stdout.splitlines() if line.strip()]

@@ -39,5 +39,13 @@ class Settings(BaseSettings):
     # API Security (empty means no auth required in dev)
     API_KEY: str = ""
 
+    # Execution sandbox. "docker" refuses to run generated code when Docker is down.
+    # "host" is an explicit local-development opt-in and runs pytest/ruff in this process.
+    SANDBOX_MODE: str = "docker"
+    SANDBOX_IMAGE: str = "agentforge-sandbox:latest"
+    SANDBOX_MEMORY: str = "512m"
+    SANDBOX_CPUS: str = "1"
+    SANDBOX_PIDS_LIMIT: int = 128
+
 
 settings = Settings()

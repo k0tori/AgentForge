@@ -41,6 +41,7 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "sandbox: real Docker sandbox tests; they fail instead of skipping when Docker is unavailable",
 ]
 
 [tool.ruff]
