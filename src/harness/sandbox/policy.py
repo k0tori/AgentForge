@@ -32,14 +32,31 @@ _FORBIDDEN_MOUNT_NAMES = frozenset({
 
 def assert_workspace_mountable(workspace: str) -> Path:
     """Reject mounts that would expose the Docker socket or a system root."""
-    path = Path(workspace).resolve()
+    raw = Path(workspace)
+    path = raw.resolve()
     if not path.is_dir():
         raise SandboxUnavailableError(f"Sandbox workspace is not a directory: {path}")
-    if path.name in _FORBIDDEN_MOUNT_NAMES or "docker.sock" in path.parts:
+    if path.name in _FORBIDDEN_MOUNT_NAMES or "docker.sock" in path.parts or "docker.sock" in raw.parts:
         raise SandboxUnavailableError("Refusing to mount the Docker socket into a sandbox")
-    anchors = {Path("/"), Path("/etc"), Path("/usr"), Path("/bin"), Path("/proc"), Path("/sys"), Path("/var/run")}
-    if path in anchors:
-        raise SandboxUnavailableError(f"Refusing to mount a system directory into a sandbox: {path}")
+    denied = (
+        Path("/etc"),
+        Path("/usr"),
+        Path("/bin"),
+        Path("/proc"),
+        Path("/sys"),
+        Path("/dev"),
+        Path("/run"),
+        Path("/var/run"),
+    )
+    for candidate in {raw, path}:
+        if candidate == Path("/"):
+            raise SandboxUnavailableError("Refusing to mount the filesystem root into a sandbox")
+        for prefix in denied:
+            try:
+                candidate.relative_to(prefix)
+            except ValueError:
+                continue
+            raise SandboxUnavailableError(f"Refusing to mount a system directory into a sandbox: {candidate}")
     return path
 
 
