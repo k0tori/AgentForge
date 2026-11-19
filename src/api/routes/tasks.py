@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-import os
 import uuid
 from pathlib import Path
 
@@ -23,24 +23,29 @@ _background_tasks: set[asyncio.Task] = set()
 
 def _validate_codebase_path(path: str) -> str:
     """Validate codebase path to prevent path traversal attacks."""
-    # Resolve to absolute path
+    if "\x00" in path:
+        raise HTTPException(status_code=400, detail="Invalid path")
     resolved = Path(path).resolve()
-
-    # Check for path traversal attempts
-    if ".." in path:
-        raise HTTPException(status_code=400, detail="Path traversal not allowed")
-
-    # For safety, only allow relative paths within current working directory
     cwd = Path.cwd().resolve()
-    if not str(resolved).startswith(str(cwd)):
-        raise HTTPException(status_code=400, detail="Path must be within project directory")
-
+    try:
+        resolved.relative_to(cwd)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path must be within project directory") from None
     return str(resolved)
+
+
+def _sse_payload(data: object) -> str:
+    """Serialize an SSE data field as JSON."""
+    if isinstance(data, str):
+        return data
+    return json.dumps(data, default=str)
 
 
 @router.post("/", response_model=TaskCreateResponse, status_code=202)
 async def create_task(request: TaskCreateRequest) -> TaskCreateResponse:
     """Create a new task and start PGE execution."""
+    task_manager.cleanup_old_tasks()
+
     # Validate and create task in manager
     codebase_path = request.codebase.get("path", "./toy-repo")
     codebase_path = _validate_codebase_path(codebase_path)
@@ -98,6 +103,8 @@ async def _execute_task(task_id: uuid.UUID, intent: str, codebase_path: str) -> 
             "code_diff": result.get("code_diff", ""),
             "execution_trace_summary": len(result.get("execution_trace", [])),
             "cost_breakdown": result.get("cost_breakdown", {}),
+            "trace": result.get("trace"),
+            "result_branch": result.get("result_branch"),
         })
 
     except Exception as e:
@@ -134,7 +141,7 @@ async def stream_task(task_id: uuid.UUID):
         async for event in task_manager.event_stream(task_id):
             yield {
                 "event": event.event,
-                "data": event.data.model_dump_json() if hasattr(event.data, "model_dump_json") else str(event.data),
+                "data": _sse_payload(event.data),
             }
 
     return EventSourceResponse(event_generator())

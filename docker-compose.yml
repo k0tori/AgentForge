@@ -32,5 +32,35 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Build with: docker compose --profile sandbox build sandbox
+  # This image is what untrusted pytest/ruff runs in. It is not a long-running service.
+  sandbox:
+    profiles: ["sandbox"]
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    image: agentforge-sandbox:latest
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agentforge
+      REDIS_URL: redis://redis:6379/0
+      TOY_REPO_PATH: /app/toy-repo
+      SANDBOX_MODE: docker
+      SANDBOX_IMAGE: agentforge-sandbox:latest
+    volumes:
+      # The API process needs the socket to start sandboxes. Sandbox containers
+      # are not given this mount; see docs/sandbox.md.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:

@@ -15,10 +15,12 @@ from src.agents.prompts.generator import (
     GENERATOR_USER_PROMPT,
 )
 from src.harness.loop.controller import LoopController
-from src.harness.safety.hooks import pre_write_hook
+from src.harness.safety.hooks import guard_tool_call
+from src.harness.sandbox.session import sandbox_session
 from src.harness.workspace import SprintWorkspace
 from src.tools.file_ops import read_file
 from src.tools.registry import registry
+from src.workflow.sprints import active_criteria
 from src.workflow.state import AgentState
 
 
@@ -35,7 +37,13 @@ class GeneratorAgent(BaseAgent):
     async def execute(self, state: AgentState) -> AgentState:
         """Implement code to satisfy the sprint contract."""
         sprint_workspace = self._create_sprint_workspace(state)
-        contract = state.get("sprint_contract", [])
+        task_id = str(state.get("task_id") or "task")
+        with sandbox_session(sprint_workspace, task_id=task_id, role="generate"):
+            return await self._generate(state, sprint_workspace)
+
+    async def _generate(self, state: AgentState, sprint_workspace: str) -> AgentState:
+        """Tool loop for one sprint. pytest and ruff run in the active sandbox."""
+        contract = active_criteria(state)
         plan = state.get("plan", [])
         current_sprint = state.get("current_sprint", 1)
         eval_feedback = state.get("eval_feedback")
@@ -80,7 +88,7 @@ class GeneratorAgent(BaseAgent):
 
         # Reset token baseline so the budget measures THIS loop's consumption,
         # not the cumulative total across all agents sharing the same LLMClient.
-        self.loop_controller.reset_token_baseline(self.llm.total_tokens_used)
+        self.loop_controller.reset_run(self.llm.total_tokens_used)
 
         while self.loop_controller.can_continue(iteration, self.llm.total_tokens_used):
             iteration += 1
@@ -113,49 +121,29 @@ class GeneratorAgent(BaseAgent):
                 # read/write in the right directory.
                 self._resolve_tool_paths(tool_args, sprint_workspace)
 
-                # Check for repeated actions
+                # Check for repeated actions, then confine every path-bearing tool
+                # to the codebase or the sprint workspace.
                 action_hash = LoopController.hash_action(tool_name, tool_args)
                 if self.loop_controller.should_force_strategy_change(action_hash):
                     result_str = "BLOCKED: Action repeated too many times. Try a different approach."
-                    tool_calls_log.append({
-                        "tool_name": tool_name,
-                        "args": tool_args,
-                        "result": result_str,
-                        "timestamp": time.time(),
-                    })
-                elif tool_name == "write_file":
-                    # Safety check for write_file
-                    hook_result = pre_write_hook(
-                        tool_args.get("path", ""),
-                        tool_args.get("content", ""),
-                        sprint_workspace,
+                else:
+                    hook_result = guard_tool_call(
+                        tool_name,
+                        tool_args,
+                        sprint_workspace=sprint_workspace,
+                        codebase_path=codebase_path,
                     )
                     if hook_result.exit_code != 0:
                         result_str = f"BLOCKED: {hook_result.reason}"
-                        tool_calls_log.append({
-                            "tool_name": tool_name,
-                            "args": tool_args,
-                            "result": result_str,
-                            "timestamp": time.time(),
-                        })
                     else:
                         self.loop_controller.record_action(action_hash)
                         result_str = await self._execute_tool(tool_name, tool_args)
-                        tool_calls_log.append({
-                            "tool_name": tool_name,
-                            "args": tool_args,
-                            "result": result_str,
-                            "timestamp": time.time(),
-                        })
-                else:
-                    self.loop_controller.record_action(action_hash)
-                    result_str = await self._execute_tool(tool_name, tool_args)
-                    tool_calls_log.append({
-                        "tool_name": tool_name,
-                        "args": tool_args,
-                        "result": result_str,
-                        "timestamp": time.time(),
-                    })
+                tool_calls_log.append({
+                    "tool_name": tool_name,
+                    "args": tool_args,
+                    "result": result_str,
+                    "timestamp": time.time(),
+                })
 
                 # Always respond with ToolMessage for each tool_call_id
                 messages.append(ToolMessage(
@@ -171,6 +159,7 @@ class GeneratorAgent(BaseAgent):
             "sprint_workspace": sprint_workspace,
             "code_diff": code_diff,
             "execution_trace": tool_calls_log,
+            "error": None,
         }
 
     def _create_sprint_workspace(self, state: AgentState) -> str:
@@ -184,7 +173,11 @@ class GeneratorAgent(BaseAgent):
         task_id = state.get("task_id", "default")
         sprint = state.get("current_sprint", 1)
         retry_count = state.get("retry_count", 0)
+        existing = state.get("sprint_workspace") or ""
         workspace = SprintWorkspace(codebase_path, task_id, sprint)
+        if state.get("preserve_workspace") and existing:
+            workspace.path = Path(existing)
+            return workspace.create(force_reseed=False)
         return workspace.create(force_reseed=(retry_count == 0))
 
     @staticmethod
@@ -212,45 +205,68 @@ class GeneratorAgent(BaseAgent):
     def _compute_diff(self, sprint_workspace: str, codebase_path: str) -> str:
         """Compute a unified diff between sprint_workspace and codebase_path.
 
-        Skips unchanged files. Produces ``--- a/`` / ``+++ b/`` for modified
-        files and ``--- /dev/null`` / ``+++ b/`` for genuinely new files.
+        Includes modifications, additions, and deletions. New files use
+        ``--- /dev/null`` and removed files use ``+++ /dev/null``.
         """
         diff_parts: list[str] = []
-        for root, dirs, files in os.walk(sprint_workspace):
-            dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git", "node_modules", ".pytest_cache")]
-            for fname in files:
-                fpath = os.path.join(root, fname)
-                rel_path = os.path.relpath(fpath, sprint_workspace)
-                original_path = os.path.join(codebase_path, rel_path)
+        workspace_files = _iter_text_files(sprint_workspace)
+        codebase_files = _iter_text_files(codebase_path) if os.path.isdir(codebase_path) else {}
 
-                try:
-                    with open(fpath, encoding="utf-8") as f:
-                        new_content = f.read()
-                except (UnicodeDecodeError, PermissionError):
-                    continue
+        for rel_path, new_content in workspace_files.items():
+            old_content = codebase_files.get(rel_path)
+            if old_content is None:
+                diff_lines = difflib.unified_diff(
+                    [],
+                    new_content.splitlines(keepends=True),
+                    fromfile="/dev/null",
+                    tofile=f"b/{rel_path}",
+                )
+            elif old_content == new_content:
+                continue
+            else:
+                diff_lines = difflib.unified_diff(
+                    old_content.splitlines(keepends=True),
+                    new_content.splitlines(keepends=True),
+                    fromfile=f"a/{rel_path}",
+                    tofile=f"b/{rel_path}",
+                )
+            diff_str = "".join(diff_lines)
+            if diff_str:
+                diff_parts.append(diff_str)
 
-                if os.path.isfile(original_path):
-                    try:
-                        with open(original_path, encoding="utf-8") as f:
-                            old_content = f.read()
-                    except (UnicodeDecodeError, PermissionError):
-                        old_content = ""
-
-                    if old_content == new_content:
-                        continue
-
-                    diff_lines = difflib.unified_diff(
-                        old_content.splitlines(keepends=True),
-                        new_content.splitlines(keepends=True),
-                        fromfile=f"a/{rel_path}",
-                        tofile=f"b/{rel_path}",
-                    )
-                    diff_str = "".join(diff_lines)
-                    if diff_str:
-                        diff_parts.append(diff_str)
-                else:
-                    diff_parts.append(
-                        f"--- /dev/null\n+++ b/{rel_path}\n{new_content}"
-                    )
+        for rel_path, old_content in codebase_files.items():
+            if rel_path in workspace_files:
+                continue
+            diff_lines = difflib.unified_diff(
+                old_content.splitlines(keepends=True),
+                [],
+                fromfile=f"a/{rel_path}",
+                tofile="/dev/null",
+            )
+            diff_str = "".join(diff_lines)
+            if diff_str:
+                diff_parts.append(diff_str)
 
         return "\n".join(diff_parts) if diff_parts else "(no changes)"
+
+
+_DIFF_SKIP_DIRS = frozenset({
+    "__pycache__", ".git", "node_modules", ".pytest_cache", ".venv", "venv", "dist", "build",
+})
+
+
+def _iter_text_files(root: str) -> dict[str, str]:
+    """Map relative path to UTF-8 text for files under root."""
+    found: dict[str, str] = {}
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in _DIFF_SKIP_DIRS and not d.startswith(".")]
+        for fname in files:
+            if fname.endswith(".pyc"):
+                continue
+            full = os.path.join(dirpath, fname)
+            try:
+                with open(full, encoding="utf-8") as handle:
+                    found[os.path.relpath(full, root)] = handle.read()
+            except (UnicodeDecodeError, PermissionError, OSError):
+                continue
+    return found

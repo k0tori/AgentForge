@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -120,3 +122,45 @@ class TraceCollector:
                 "final_verdict": self.summary.final_verdict,
             },
         }
+
+
+def record_node(collector: TraceCollector, agent: str, result: dict, started: float) -> None:
+    """Append one graph node to the trace, including generator tool calls."""
+    tool_calls: list[ToolCallRecord] = []
+    if agent == "generator":
+        for item in result.get("execution_trace") or []:
+            if not isinstance(item, dict):
+                continue
+            args = item.get("args")
+            tool_calls.append(ToolCallRecord(
+                tool=str(item.get("tool_name", "")),
+                args=args if isinstance(args, dict) else {},
+                result=str(item.get("result", ""))[:500],
+            ))
+    error = result.get("error")
+    collector.add_step(
+        agent=agent,
+        action="error" if error else agent,
+        thought=str(error or result.get("final_verdict") or ""),
+        tool_calls=tool_calls,
+        duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
+        sprint=result.get("current_sprint"),
+    )
+
+
+def observe_node(agent_name: str, fn):
+    """Wrap a graph node so its result is recorded on the state's TraceCollector."""
+
+    async def node(state: dict) -> dict:
+        started = time.perf_counter()
+        result = fn(state)
+        if inspect.isawaitable(result):
+            result = await result
+        collector = None
+        if isinstance(result, dict):
+            collector = result.get("trace_collector") or state.get("trace_collector")
+        if isinstance(collector, TraceCollector) and isinstance(result, dict):
+            record_node(collector, agent_name, result, started)
+        return result
+
+    return node

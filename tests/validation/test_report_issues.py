@@ -13,10 +13,8 @@ P3: 错误处理、AgentState 验证、配置可配置性
 import ast
 import re
 from pathlib import Path
-from typing import Set
 
 import pytest
-
 
 # ============================================================
 # 配置常量
@@ -208,7 +206,7 @@ class TestToyRepoDependencies:
 
         # 扫描所有 Python 文件的 import
         python_files = list(TOY_REPO_ROOT.rglob("*.py"))
-        third_party_imports: Set[str] = set()
+        third_party_imports: set[str] = set()
 
         for py_file in python_files:
             try:
@@ -495,7 +493,6 @@ class TestErrorHandling:
         """工具执行应该有超时机制"""
         # 检查工具执行路径是否有超时
         test_ops_path = SRC_ROOT / "tools" / "test_ops.py"
-        registry_path = SRC_ROOT / "tools" / "registry.py"
 
         has_timeout = False
 

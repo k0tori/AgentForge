@@ -22,10 +22,14 @@ dependencies = [
     "sentence-transformers>=3.0.0",
 ]
 
+[project.scripts]
+agentforge = "src.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
+    "pytest-timeout>=2.3.0",
     "mypy>=1.13.0",
     "ruff>=0.8.0",
     "aiosqlite>=0.20.0",
@@ -33,9 +37,11 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "sandbox: real Docker sandbox tests; they fail instead of skipping when Docker is unavailable",
 ]
 
 [tool.ruff]
@@ -44,3 +50,20 @@ line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/integration/mocks/llm_responses.py" = ["E501"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# The import root is the repository root (`import src`). Do not let setuptools
+# treat `src/` as a src-layout directory and flatten its children to top-level.
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+exclude = ["tests*", "toy-repo*"]

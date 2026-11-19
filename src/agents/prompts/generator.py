@@ -21,6 +21,7 @@ Your job is to implement code that satisfies the sprint contract, following exis
 - write_file(path, content): Write a file to the sprint workspace ONLY
 - run_tests(path): Run pytest on the sprint workspace
 - run_lint(path): Run ruff lint check
+- retrieval_search(query, top_k=5): Search indexed code and CONVENTIONS.md by meaning
 
 ## Sprint Contract
 {sprint_contract}

@@ -10,7 +10,6 @@ Uses mock LLM responses to avoid real API calls.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,8 +20,7 @@ from src.agents.evaluator import EvaluatorAgent
 from src.agents.generator import GeneratorAgent
 from src.agents.planner import PlannerAgent
 from src.llm.client import LLMClient
-from src.workflow.graph import run_task
-from src.workflow.state import AgentState, Criterion
+from src.workflow.state import AgentState
 
 from .mocks.llm_responses import (
     EVALUATOR_RESPONSE,

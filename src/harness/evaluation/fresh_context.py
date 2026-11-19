@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 
@@ -30,13 +31,17 @@ class FreshContextEvaluator:
 
     @staticmethod
     def validate_no_leakage(eval_input: EvalInput, full_state: dict) -> bool:
-        """Verify that eval_input doesn't contain fields from full_state that should be hidden.
-
-        This is a safety check for testing — not called in production flow.
-        """
+        """Return False when the isolated input contains the generator trace."""
         forbidden_keys = {"execution_trace", "eval_feedback", "retry_count"}
         input_dict = eval_input.__dict__
-        for key in forbidden_keys:
-            if key in input_dict:
-                return False
-        return True
+        if any(key in input_dict for key in forbidden_keys):
+            return False
+        trace = full_state.get("execution_trace") or []
+        if not trace:
+            return True
+        serialized = json.dumps(trace, default=str)
+        visible = "\n".join([
+            eval_input.code_diff,
+            json.dumps(eval_input.sprint_contract, default=str),
+        ])
+        return serialized not in visible

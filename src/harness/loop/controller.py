@@ -28,6 +28,18 @@ class LoopController:
         """Return True if within budget (can continue)."""
         return current < self.max_iterations
 
+    def reset_run(self, current_tokens: int = 0) -> None:
+        """Start a fresh generator attempt.
+
+        The controller lives on the long-lived GeneratorAgent, so timeout and
+        repeat counts must be cleared per task. Otherwise the 300s budget
+        expires for the whole process and identical reads get blocked later.
+        """
+        self._start_time = time.time()
+        self._action_counts.clear()
+        self.seen_actions.clear()
+        self.reset_token_baseline(current_tokens)
+
     def reset_token_baseline(self, current_tokens: int = 0) -> None:
         """Record the token count at the start of a loop run.
 

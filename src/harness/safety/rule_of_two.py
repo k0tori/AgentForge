@@ -36,3 +36,11 @@ def validate_tool_set(tool_names: list[str]) -> list[str]:
             )
 
     return violations
+
+
+def enforce_tool_set(tool_names: list[str]) -> None:
+    """Raise when the registered tool set violates Rule of Two."""
+    violations = validate_tool_set(tool_names)
+    if violations:
+        joined = "\n".join(violations)
+        raise RuntimeError(f"Tool set violates Rule of Two:\n{joined}")

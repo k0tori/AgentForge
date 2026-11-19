@@ -7,7 +7,7 @@ import textwrap
 
 import pytest
 
-from src.retrieval.chunking import CodeChunk, chunk_directory, chunk_file
+from src.retrieval.chunking import chunk_directory, chunk_file, split_markdown_sections
 
 
 @pytest.fixture
@@ -72,6 +72,7 @@ class TestChunkFile:
         assert module_chunks[0].chunk_name == "mod"
         assert "import os" in module_chunks[0].content
         assert "My module" in module_chunks[0].content
+        assert "X = 1" in module_chunks[0].content
 
     def test_empty_file(self, tmp_dir):
         path = _write_file(tmp_dir, "empty.py", "")
@@ -141,6 +142,38 @@ class TestChunkDirectory:
         _write_file(tmp_dir, ".hidden/secret.py", "def s(): pass")
         chunks = chunk_directory(tmp_dir)
         assert all(".hidden" not in c.file_path for c in chunks)
+
+    def test_skips_venv(self, tmp_dir):
+        _write_file(tmp_dir, "app.py", "def visible(): pass")
+        _write_file(tmp_dir, "venv/lib/site.py", "def hidden(): pass")
+        chunks = chunk_directory(tmp_dir)
+        assert all("venv" not in c.file_path for c in chunks)
+        assert any(c.chunk_name == "visible" for c in chunks)
+
+    def test_class_keeps_fields_and_keywords(self, tmp_dir):
+        path = _write_file(tmp_dir, "user.py", """
+            class User(SQLModel, table=True):
+                '''A user.'''
+                username: str
+                hashed_password: str = "secret"
+
+                def rename(self, name: str) -> None:
+                    self.username = name
+        """)
+        chunks = chunk_file(path, project_root=tmp_dir)
+        class_chunk = next(c for c in chunks if c.chunk_type == "class")
+        assert "table=True" in class_chunk.content
+        assert "username: str" in class_chunk.content
+        assert "hashed_password" in class_chunk.content
+        method = next(c for c in chunks if c.chunk_name == "User.rename")
+        assert "self.username = name" in method.content
+
+    def test_split_markdown_sections(self):
+        sections = split_markdown_sections("# Title\n\nIntro\n\n## Rules\n\nBe strict\n")
+        assert sections[0][0] == "Title"
+        assert "Intro" in sections[0][1]
+        assert sections[1][0] == "Rules"
+        assert "Be strict" in sections[1][1]
 
     def test_skips_pycache(self, tmp_dir):
         _write_file(tmp_dir, "mod.py", "def f(): pass")

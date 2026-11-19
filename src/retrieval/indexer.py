@@ -5,16 +5,30 @@ Indexes Python code into code_embeddings and CONVENTIONS.md into best_practice_e
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
+from sqlalchemy import text
+
 from src.config import settings
-from src.retrieval.chunking import chunk_directory
+from src.retrieval.chunking import chunk_directory, split_markdown_sections
 from src.retrieval.embeddings import embedding_generator
 from src.storage.database import async_session_factory
 from src.storage.vector import delete_best_practice_embeddings, delete_by_project_path, insert_embedding
 
 logger = logging.getLogger(__name__)
+
+
+async def storage_available() -> bool:
+    """Return whether PostgreSQL accepts a connection. Does not load the embedding model."""
+    try:
+        async with async_session_factory() as session:
+            await session.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        logger.warning("Vector database is not reachable; skipping index")
+        return False
 
 
 async def index_directory(directory: str | None = None, project_path: str | None = None) -> int:
@@ -42,7 +56,7 @@ async def index_directory(directory: str | None = None, project_path: str | None
 
     # 2. Generate embeddings in batch
     texts = [c.content for c in chunks]
-    embeddings = embedding_generator.generate_embeddings(texts)
+    embeddings = await asyncio.to_thread(embedding_generator.generate_embeddings, texts)
     logger.info("Generated %d embeddings", len(embeddings))
 
     # 3. Clear old records and insert new ones
@@ -77,7 +91,7 @@ async def index_conventions(directory: str | None = None) -> int:
         directory: Directory containing CONVENTIONS.md. Defaults to settings.TOY_REPO_PATH.
 
     Returns:
-        Number of entries indexed (0 or 1).
+        Number of sections indexed.
     """
     directory = os.path.abspath(directory or settings.TOY_REPO_PATH)
     conventions_path = os.path.join(directory, "CONVENTIONS.md")
@@ -93,23 +107,31 @@ async def index_conventions(directory: str | None = None) -> int:
         logger.exception("Failed to read CONVENTIONS.md")
         return 0
 
-    embedding = embedding_generator.generate_embedding(content)
+    sections = split_markdown_sections(content)
+    if not sections:
+        logger.warning("CONVENTIONS.md at %s is empty", conventions_path)
+        return 0
+
+    embeddings = await asyncio.to_thread(
+        embedding_generator.generate_embeddings, [body for _, body in sections]
+    )
 
     async with async_session_factory() as session:
-        await delete_best_practice_embeddings(session)
-        await insert_embedding(
-            session,
-            table="best_practice_embeddings",
-            content=content,
-            embedding=embedding,
-            category="architecture",
-            title="Project Coding Conventions",
-            source="CONVENTIONS.md",
-        )
+        await delete_best_practice_embeddings(session, source="CONVENTIONS.md")
+        for (title, body), embedding in zip(sections, embeddings, strict=True):
+            await insert_embedding(
+                session,
+                table="best_practice_embeddings",
+                content=body,
+                embedding=embedding,
+                category="architecture",
+                title=title,
+                source="CONVENTIONS.md",
+            )
         await session.commit()
 
-    logger.info("Indexed CONVENTIONS.md into best_practice_embeddings")
-    return 1
+    logger.info("Indexed %d CONVENTIONS.md sections into best_practice_embeddings", len(sections))
+    return len(sections)
 
 
 async def index_all(directory: str | None = None) -> dict[str, int]:
@@ -121,6 +143,8 @@ async def index_all(directory: str | None = None) -> dict[str, int]:
     Returns:
         Dict with counts: {"code_chunks": N, "conventions": M}.
     """
+    if not await storage_available():
+        return {"code_chunks": 0, "conventions": 0}
     code_count = await index_directory(directory)
     conv_count = await index_conventions(directory)
     return {"code_chunks": code_count, "conventions": conv_count}

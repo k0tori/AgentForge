@@ -14,13 +14,8 @@ async def get_redis() -> redis.Redis:
     """Get or create the Redis client singleton."""
     global _redis
     if _redis is None:
-        # Parse URL manually for better Windows compatibility
-        from urllib.parse import urlparse
-
-        parsed = urlparse(settings.REDIS_URL)
-        _redis = redis.Redis(
-            host=parsed.hostname or "localhost",
-            port=parsed.port or 6379,
+        _redis = redis.from_url(
+            settings.REDIS_URL,
             decode_responses=True,
             socket_connect_timeout=5,
             socket_timeout=5,
