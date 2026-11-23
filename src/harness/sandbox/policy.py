@@ -14,6 +14,7 @@ _IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$")
 _MEMORY_RE = re.compile(r"^[0-9]+[bkmg]$", re.IGNORECASE)
 _CPU_RE = re.compile(r"^[0-9]+(\.[0-9]+)?$")
 _ATTEMPT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_INSTANCE_RE = _ATTEMPT_RE
 
 # The process inside the container sees only these variables.
 CONTAINER_ENV = (
@@ -87,6 +88,26 @@ def _checked_pids() -> str:
     return str(pids)
 
 
+def checked_executor_id(value: str | None = None) -> str:
+    """Return the installation id this executor is allowed to reap.
+
+    The id comes from SANDBOX_EXECUTOR_ID, not from a client request. An empty
+    or illegal value refuses startup. The same id across two processes is one
+    cleanup domain: either restart removes that id's containers.
+    """
+    raw = settings.SANDBOX_EXECUTOR_ID if value is None else value
+    token = raw.strip()
+    if not token:
+        raise SandboxUnavailableError(
+            "SANDBOX_EXECUTOR_ID is empty. The executor will not start and will not remove containers."
+        )
+    if _INSTANCE_RE.fullmatch(token) is None:
+        raise SandboxUnavailableError(
+            "SANDBOX_EXECUTOR_ID must be one token of letters, digits, dot, underscore, or hyphen."
+        )
+    return token
+
+
 def _checked_attempt(attempt_id: str) -> str:
     if not _ATTEMPT_RE.fullmatch(attempt_id):
         raise SandboxUnavailableError(f"Invalid sandbox attempt id: {attempt_id!r}")
@@ -152,6 +173,8 @@ def build_docker_run(workspace: str, argv: list[str], *, name: str, attempt_id: 
         "agentforge.sandbox=1",
         "--label",
         "agentforge.managed=1",
+        "--label",
+        f"agentforge.executor={checked_executor_id()}",
         "--label",
         f"agentforge.attempt={_checked_attempt(attempt_id)}",
         "-v",

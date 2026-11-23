@@ -221,9 +221,12 @@ def main() -> None:
             settings.SANDBOX_API_UID,
             settings.SANDBOX_API_GID,
         )
-        from src.harness.sandbox.runtime import reap_managed_containers
+        from src.harness.sandbox.policy import checked_executor_id
+        from src.harness.sandbox.runtime import reap_instance_containers
 
-        reap_managed_containers()
+        # Validate before any docker rm. A missing id must not sweep the daemon.
+        instance_id = checked_executor_id()
+        reap_instance_containers(instance_id)
         _listen(root)
     except SandboxUnavailableError as exc:
         logger.error("executor refused to start: %s", exc)

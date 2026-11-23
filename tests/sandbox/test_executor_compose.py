@@ -58,15 +58,27 @@ def _api(script: str, *extra: str, env: list[str] | None = None) -> subprocess.C
     )
 
 
-def _managed() -> str:
+def _instance_ids(instance: str) -> list[str]:
     listed = subprocess.run(
-        ["docker", "ps", "-aq", "--filter", "label=agentforge.managed=1"],
+        [
+            "docker",
+            "ps",
+            "-aq",
+            "--filter",
+            "label=agentforge.managed=1",
+            "--filter",
+            f"label=agentforge.executor={instance}",
+        ],
         capture_output=True,
         text=True,
         timeout=20,
         check=False,
     )
-    return listed.stdout.strip()
+    return [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+
+
+def _managed() -> str:
+    return "\n".join(_instance_ids(PROJECT))
 
 
 @pytest.fixture(scope="module")
@@ -85,7 +97,9 @@ def stack():
         yield PROJECT
     finally:
         _compose("down", "-v", "--remove-orphans", timeout=180)
-        subprocess.run(["docker", "rm", "-f", *(_managed().split() or ["none"])], capture_output=True, check=False)
+        ids = _instance_ids(PROJECT)
+        if ids:
+            subprocess.run(["docker", "rm", "-f", *ids], capture_output=True, check=False)
 
 
 def test_api_container_cannot_open_the_host_socket(stack: str):
@@ -390,6 +404,166 @@ def test_executor_rejects_escape_identity_and_cleans_up(stack: str):
     while time.monotonic() < deadline and _managed():
         time.sleep(0.5)
     assert _managed() == ""
+
+
+def _running(container_id: str) -> bool:
+    probe = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Running}}", container_id],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    return probe.returncode == 0 and probe.stdout.strip() == "true"
+
+
+def _wait_until(predicate, seconds: float):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.4)
+    return False
+
+
+def test_restart_reaps_only_this_executor_instance(stack: str):
+    """Two installations. Restarting A removes A's leftover container and leaves B running."""
+    del stack
+    suffix = uuid.uuid4().hex[:8]
+    id_a = f"inst-a-{suffix}"
+    id_b = f"inst-b-{suffix}"
+    base = Path("/tmp") / f"agentforge-ns-{suffix}"
+    names = {
+        "exec_a": f"af-exec-a-{suffix}",
+        "exec_b": f"af-exec-b-{suffix}",
+        "client_a": f"af-client-a-{suffix}",
+        "client_b": f"af-client-b-{suffix}",
+    }
+    roots = {"a": base / "a" / "var" / "lib" / "workspaces", "b": base / "b" / "var" / "lib" / "workspaces"}
+    socks = {"a": base / "a" / "sock", "b": base / "b" / "sock"}
+
+    def start_executor(key: str, instance: str) -> None:
+        roots[key].mkdir(parents=True, exist_ok=True)
+        socks[key].mkdir(parents=True, exist_ok=True)
+        started = subprocess.run(
+            [
+                "docker", "run", "-d", "--name", names[f"exec_{key}"],
+                "--user", "0:0",
+                "-e", f"SANDBOX_EXECUTOR_ID={instance}",
+                "-e", "SANDBOX_EXECUTOR_SOCK=/run/agentforge/executor.sock",
+                "-e", f"SANDBOX_WORKSPACE_ROOT={roots[key]}",
+                "-e", "SANDBOX_API_UID=10002",
+                "-e", "SANDBOX_API_GID=10002",
+                "-e", "SANDBOX_RUN_UID=10002",
+                "-e", "SANDBOX_RUN_GID=10002",
+                "-e", "SANDBOX_IMAGE=agentforge-sandbox:latest",
+                "-v", "/var/run/docker.sock:/var/run/docker.sock",
+                "-v", f"{roots[key]}:{roots[key]}",
+                "-v", f"{socks[key]}:/run/agentforge",
+                "agentforge-executor:latest",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert started.returncode == 0, started.stderr
+        logs = ""
+
+        def listening() -> bool:
+            nonlocal logs
+            probe = subprocess.run(
+                ["docker", "logs", names[f"exec_{key}"]],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            logs = probe.stdout + probe.stderr
+            return "executor listening" in logs
+
+        assert _wait_until(listening, 20), logs
+
+    def start_client(key: str) -> None:
+        script = textwrap.dedent(
+            """
+            import os
+            from pathlib import Path
+            from src.harness.sandbox.client import prepare, run
+            name = prepare()
+            target = Path(os.environ["SANDBOX_WORKSPACE_ROOT"]) / name
+            target.joinpath("test_sleep.py").write_text(
+                "import time\\n\\ndef test_sleep():\\n    time.sleep(50)\\n",
+                encoding="utf-8",
+            )
+            print("READY", flush=True)
+            run(name, "pytest", 50, "test_sleep.py")
+            """
+        )
+        started = subprocess.run(
+            [
+                "docker", "run", "-d", "--name", names[f"client_{key}"],
+                "--user", "10002:10002",
+                "--entrypoint", "python",
+                "-e", "SANDBOX_EXECUTOR_SOCK=/run/agentforge/executor.sock",
+                "-e", f"SANDBOX_WORKSPACE_ROOT={roots[key]}",
+                "-v", f"{roots[key]}:{roots[key]}",
+                "-v", f"{socks[key]}:/run/agentforge",
+                "agentforge-executor:latest",
+                "-c", script,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert started.returncode == 0, started.stderr
+
+    try:
+        start_executor("a", id_a)
+        start_executor("b", id_b)
+        start_client("a")
+        start_client("b")
+        assert _wait_until(lambda: len(_instance_ids(id_a)) == 1, 40), _instance_ids(id_a)
+        assert _wait_until(lambda: len(_instance_ids(id_b)) == 1, 40), _instance_ids(id_b)
+        left_a = _instance_ids(id_a)[0]
+        left_b = _instance_ids(id_b)[0]
+        killed = subprocess.run(
+            ["docker", "kill", names["exec_a"]],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert killed.returncode == 0, killed.stderr
+        time.sleep(1)
+        assert _running(left_a), "A's sandbox exited when its executor was killed, so reap was not tested"
+        assert _running(left_b)
+        subprocess.run(["docker", "rm", "-f", names["exec_a"]], capture_output=True, check=False)
+        start_executor("a", id_a)
+        assert _wait_until(lambda: left_a not in _instance_ids(id_a) and not _running(left_a), 20)
+        assert _running(left_b)
+        assert left_b in _instance_ids(id_b)
+    finally:
+        subprocess.run(
+            ["docker", "rm", "-f", *names.values()],
+            capture_output=True,
+            check=False,
+        )
+        leftovers = _instance_ids(id_a) + _instance_ids(id_b)
+        if leftovers:
+            subprocess.run(["docker", "rm", "-f", *leftovers], capture_output=True, check=False)
+        subprocess.run(
+            [
+                "docker", "run", "--rm", "--user", "0",
+                "-v", f"{base}:/cleanup",
+                "agentforge-sandbox:latest",
+                "python", "-c",
+                "import shutil; shutil.rmtree('/cleanup', ignore_errors=True)",
+            ],
+            capture_output=True,
+            check=False,
+        )
 
 
 def test_task_database_volume_is_writable_by_the_api_user(stack: str):

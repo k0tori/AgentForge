@@ -3,7 +3,7 @@ FROM python:3.12-slim-bookworm
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential \
+    && apt-get install -y --no-install-recommends build-essential git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./
@@ -20,8 +20,9 @@ ENV TOY_REPO_PATH=/app/toy-repo \
 
 RUN groupadd --gid 10002 agentforge \
     && useradd --uid 10002 --gid 10002 --create-home --shell /usr/sbin/nologin agentforge \
-    && mkdir -p /var/lib/agentforge \
-    && chown agentforge:agentforge /var/lib/agentforge
+    && mkdir -p /var/lib/agentforge /app/.agentforge/work \
+    && chown agentforge:agentforge /var/lib/agentforge \
+    && chown -R agentforge:agentforge /app/.agentforge
 
 USER agentforge
 

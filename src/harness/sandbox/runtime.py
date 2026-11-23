@@ -229,17 +229,28 @@ def execute_in_docker(
     return CommandResult(process.returncode or 0, stdout, stderr, truncated=overflow.is_set())
 
 
-def reap_managed_containers() -> None:
-    """On executor start, remove containers this program may have left behind.
+def reap_instance_containers(instance_id: str) -> None:
+    """Remove sandbox containers labeled with this installation id only.
 
-    The set is selected by a label this executor applies. A client cannot pass
-    an id and delete a different container. Containers that were running lose
-    their result; that is a failure, not a host fallback.
+    The id is the executor's own SANDBOX_EXECUTOR_ID. A client request cannot
+    select it. Containers that were still running lose their result; that is a
+    failure, not a host fallback. Other installation ids are left alone.
     """
+    from src.harness.sandbox.policy import checked_executor_id
+
+    token = checked_executor_id(instance_id)
     if shutil.which("docker") is None:
         return
     listed = subprocess.run(
-        ["docker", "ps", "-aq", "--filter", "label=agentforge.managed=1"],
+        [
+            "docker",
+            "ps",
+            "-aq",
+            "--filter",
+            "label=agentforge.managed=1",
+            "--filter",
+            f"label=agentforge.executor={token}",
+        ],
         capture_output=True,
         text=True,
         timeout=30,

@@ -49,6 +49,9 @@ services:
     image: agentforge-executor:latest
     user: "0:0"
     environment:
+      # Stable for this compose project across restarts. Another project on the
+      # same daemon must use a different project name, or the two share a cleanup domain.
+      SANDBOX_EXECUTOR_ID: ${COMPOSE_PROJECT_NAME:-agentforge}
       SANDBOX_EXECUTOR_SOCK: /run/agentforge/executor.sock
       SANDBOX_WORKSPACE_ROOT: /var/lib/agentforge/workspaces
       SANDBOX_API_UID: "10002"
