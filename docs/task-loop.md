@@ -27,6 +27,9 @@ uvicorn src.main:app --port 8000 --workers 1
 # 路径必须位于当前工作目录内。在仓库根目录把副本放进工作目录：
 mkdir -p .agentforge/work
 rm -rf .agentforge/work/toy-copy && cp -a toy-repo .agentforge/work/toy-copy
+git -C .agentforge/work/toy-copy init -b main
+git -C .agentforge/work/toy-copy -c user.email=you@example.com -c user.name=You add -A
+git -C .agentforge/work/toy-copy -c user.email=you@example.com -c user.name=You commit -m "demo baseline"
 
 curl -s -X POST http://127.0.0.1:8000/api/v1/tasks/ \
   -H 'Content-Type: application/json' \
@@ -62,7 +65,13 @@ curl -s http://127.0.0.1:8000/api/v1/tasks/<task_id>
 git -C .agentforge/work/toy-copy show <result_branch>:src/ping.py
 ```
 
-结果分支是仓库 HEAD 加上这次任务相对种子快照改过的路径。`.github` 这类已跟踪的隐藏目录如果任务没改，会留在分支上。工作区里还没提交、任务也没改的文件仍留在工作区，不会被这次发布删掉，也不会自动进分支。`.env`、私钥等敏感路径不会被新加进分支；已经跟踪的敏感文件不会被这次发布悄悄删掉。仓库如果配置了 git clean/smudge filter，发布会直接拒绝，因为 `core.hooksPath` 挡不住 filter。
+发布要求副本已经是有提交的 Git 仓库。没有自己的 `.git`，或者还没有 HEAD，会在 `git init`、`add`、`commit`、`worktree` 之前拒绝，不会自动建仓库或 baseline。
+
+结果分支从那个 HEAD 开始。任务相对种子快照改过的路径会整文件放上去：如果那个文件在种子里已经带有未提交的修改，分支上的文件是「脏内容 + 这次修改」，不是只含任务补丁。任务没碰到的脏文件仍只留在工作区，不会进分支，也不会被删掉。`.github` 这类没改到的已跟踪隐藏目录留在 HEAD 版本上。
+
+`.env`、私钥、`credentials.json` 这类路径名不会被新加进分支，已跟踪的同类文件也不会被悄悄删掉。普通文件正文里的秘密不在这份名单里，发布不扫描文件内容。Git LFS、clean/smudge filter，以及把符号链接改成另一种链接，都不支持；配了 filter 会在检出前拒绝，因为 `core.hooksPath` 挡不住 filter。
+
+还没创建提交或分支时，拒绝会说明没有 commit、也没有新分支。如果临时分支已经写出来之后才失败，错误会写出这条分支的名字，并说明它留着复查、不是验收结果。
 
 持有写锁的进程退出后，再启动的进程仍能查到已完成结果。退出时还在 `pending` 或 `running` 的任务会变成 `interrupted`。如果 git 分支已经写出来、数据库还没记成 completed，状态也是 `interrupted`，`demo_completed` 不会变成 true，这条分支不能当成验收通过。另一个还活着的进程不会被这次启动收成 interrupted。
 

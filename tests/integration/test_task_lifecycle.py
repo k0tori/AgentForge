@@ -18,9 +18,15 @@ from src.api.task_manager import TaskManager, TaskStatus
 from src.main import app
 
 
-def _copy_toy_repo() -> Path:
+def _copy_toy_repo(*, commit: bool = True) -> Path:
+    """Copy toy-repo. Publish needs a committed repo, so the default commits the copy."""
     destination = Path.cwd() / ".agentforge" / "it" / uuid.uuid4().hex
     shutil.copytree(Path.cwd() / "toy-repo", destination, ignore=shutil.ignore_patterns(".git"))
+    if commit:
+        subprocess.run(["git", "init", "-b", "main"], cwd=destination, check=True, capture_output=True)
+        git = ["git", "-c", "user.email=test@local", "-c", "user.name=test", "-c", "commit.gpgsign=false"]
+        subprocess.run([*git, "add", "-A"], cwd=destination, check=True, capture_output=True)
+        subprocess.run([*git, "commit", "-m", "demo baseline"], cwd=destination, check=True, capture_output=True)
     return destination
 
 
@@ -269,7 +275,7 @@ def test_restart_marks_running_tasks_interrupted_and_keeps_results(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_deterministic_executor_is_disabled_unless_enabled(task_db: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("src.config.settings.DETERMINISTIC_EXECUTOR", False)
-    codebase = _copy_toy_repo()
+    codebase = _copy_toy_repo(commit=False)
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -294,7 +300,7 @@ async def test_deterministic_codebase_must_stay_under_agentforge(task_db: Path):
 
 @pytest.mark.asyncio
 async def test_deterministic_symlink_is_not_published(task_db: Path):
-    codebase = _copy_toy_repo()
+    codebase = _copy_toy_repo(commit=False)
     secret = codebase.parent / "secret.txt"
     secret.write_text("SECRET_TOKEN")
     (codebase / "src" / "leak.py").symlink_to(secret)

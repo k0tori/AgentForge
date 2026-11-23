@@ -161,10 +161,53 @@ def test_configured_filter_is_refused_before_it_runs(tmp_path: Path):
     assert not marker.exists()
 
 
+def test_no_head_with_filter_does_not_touch_the_repository(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    marker = tmp_path / "filter-marker"
+    (repo / "README.md").write_text("readme\n", encoding="utf-8")
+    (repo / ".gitattributes").write_text("* filter=leak\n", encoding="utf-8")
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "--local", "filter.leak.clean", f"touch {marker}")
+    _git(repo, "config", "--local", "filter.leak.smudge", f"touch {marker}")
+    config_before = (repo / ".git" / "config").read_bytes()
+    index_path = repo / ".git" / "index"
+    index_before = index_path.read_bytes() if index_path.exists() else None
+    readme_before = (repo / "README.md").read_bytes()
+    workspace = SprintWorkspace(str(repo), "no-head-filter", 1)
+    root = Path(workspace.create())
+    (root / "ping.py").write_text("x = 1\n", encoding="utf-8")
+    with pytest.raises(PublishRejectedError, match="no commit on HEAD"):
+        workspace.publish()
+    assert not marker.exists()
+    assert (repo / ".git" / "config").read_bytes() == config_before
+    assert (repo / "README.md").read_bytes() == readme_before
+    index_after = index_path.read_bytes() if index_path.exists() else None
+    assert index_after == index_before
+    refs = _git(repo, "show-ref", check=False)
+    assert refs.stdout.strip() == ""
+    assert "agentforge/" not in refs.stdout
+
+
+def test_plain_directory_is_not_initialized(tmp_path: Path):
+    repo = tmp_path / "plain"
+    repo.mkdir()
+    (repo / "README.md").write_text("readme\n", encoding="utf-8")
+    before = (repo / "README.md").read_bytes()
+    workspace = SprintWorkspace(str(repo), "plain", 1)
+    root = Path(workspace.create())
+    (root / "ping.py").write_text("x = 1\n", encoding="utf-8")
+    with pytest.raises(PublishRejectedError, match="not a Git repository"):
+        workspace.publish()
+    assert not (repo / ".git").exists()
+    assert (repo / "README.md").read_bytes() == before
+
+
 def test_deadline_after_commit_keeps_the_branch_name(tmp_path: Path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "README.md").write_text("readme\n", encoding="utf-8")
+    _commit_all(repo)
     workspace = SprintWorkspace(str(repo), "residual", 1)
     root = Path(workspace.create())
     (root / "ping.py").write_text("x = 1\n", encoding="utf-8")

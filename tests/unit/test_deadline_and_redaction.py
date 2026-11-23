@@ -73,6 +73,10 @@ def test_in_flight_git_command_finishes_and_later_writes_do_not(tmp_path: Path, 
     codebase = tmp_path / "repo"
     codebase.mkdir()
     (codebase / "README.md").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-b", "main"], cwd=codebase, check=True, capture_output=True)
+    git = ["git", "-c", "user.email=test@local", "-c", "user.name=test", "-c", "commit.gpgsign=false"]
+    subprocess.run([*git, "add", "-A"], cwd=codebase, check=True, capture_output=True)
+    subprocess.run([*git, "commit", "-m", "base"], cwd=codebase, check=True, capture_output=True)
     workspace = SprintWorkspace(str(codebase), "slow-git", 1)
     root = Path(workspace.create())
     (root / "added.py").write_text("x = 1\n", encoding="utf-8")
@@ -94,9 +98,8 @@ def test_in_flight_git_command_finishes_and_later_writes_do_not(tmp_path: Path, 
             workspace.publish()
     finally:
         reset_deadline(token)
-    assert calls, "the in-flight git command did not run"
-    assert not any(command[:1] == ("commit",) for command in calls[1:])
-    assert not any(command[:2] == ("worktree", "add") for command in calls[1:])
+    assert calls and calls[0][:1] == ("rev-parse",), "the first git command did not finish"
+    assert not any(command[:1] == ("commit",) for command in calls)
     branches = subprocess.run(
         ["git", "-C", str(codebase), "branch", "--list", "agentforge/*"],
         capture_output=True,
@@ -111,6 +114,10 @@ async def test_blocking_publish_after_deadline_is_not_success(tmp_path: Path, mo
     codebase = tmp_path / "repo"
     codebase.mkdir()
     (codebase / "README.md").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-b", "main"], cwd=codebase, check=True, capture_output=True)
+    git = ["git", "-c", "user.email=test@local", "-c", "user.name=test", "-c", "commit.gpgsign=false"]
+    subprocess.run([*git, "add", "-A"], cwd=codebase, check=True, capture_output=True)
+    subprocess.run([*git, "commit", "-m", "base"], cwd=codebase, check=True, capture_output=True)
     monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", SECRET)
     monkeypatch.setattr(settings, "SANDBOX_MODE", "host")
     monkeypatch.setattr(settings, "TIMEOUT_SECONDS", 0.05)

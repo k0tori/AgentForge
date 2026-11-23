@@ -97,6 +97,10 @@ def test_publish_lock_serializes_two_processes(tmp_path: Path):
     codebase = tmp_path / "repo"
     codebase.mkdir()
     (codebase / "README.md").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-b", "main"], cwd=codebase, check=True, capture_output=True)
+    git = ["git", "-c", "user.email=test@local", "-c", "user.name=test", "-c", "commit.gpgsign=false"]
+    subprocess.run([*git, "add", "-A"], cwd=codebase, check=True, capture_output=True)
+    subprocess.run([*git, "commit", "-m", "base"], cwd=codebase, check=True, capture_output=True)
     one = tmp_path / "one.py"
     two = tmp_path / "two.py"
     one.write_text('def marker() -> str:\n    return "one"\n', encoding="utf-8")

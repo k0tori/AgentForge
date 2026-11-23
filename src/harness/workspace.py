@@ -28,9 +28,7 @@ from src.harness.publish_guard import (
     PublishRejectedError,
     assert_delta_is_publishable,
     assert_destination_is_safe,
-    is_sensitive_path,
     scan_tree,
-    symlink_escapes,
     tree_delta,
     write_regular_file,
 )
@@ -148,7 +146,7 @@ class SprintWorkspace:
         return branch_name
 
     def _publish_locked(self, branch: str) -> str:
-        self._ensure_repo()
+        self._require_existing_head()
         self._reject_executable_filters()
         seed = self._read_seed()
         current = scan_tree(self.path)
@@ -183,18 +181,31 @@ class SprintWorkspace:
             if worktree.exists():
                 shutil.rmtree(worktree, ignore_errors=True)
 
-    def _ensure_repo(self) -> None:
-        """Make codebase_path its own git root so a parent repo is not modified."""
+    def _require_existing_head(self) -> None:
+        """Publish only onto a repository that already has a commit.
+
+        This reads HEAD. It does not init, add, commit, or create a worktree.
+        A directory inside another repo is not accepted unless it has its own .git.
+        """
         if not (self.codebase_path / ".git").exists():
-            _git(self.codebase_path, "init")
-        if _git(self.codebase_path, "rev-parse", "--verify", "HEAD", check=False).returncode != 0:
-            for relative, meta in scan_tree(self.codebase_path).items():
-                if is_sensitive_path(relative):
-                    continue
-                if meta["kind"] == "symlink" and symlink_escapes(self.codebase_path, relative, meta["target"]):
-                    continue
-                _add_if_trackable(self.codebase_path, relative)
-            _git(self.codebase_path, "commit", "--allow-empty", "-m", "agentforge baseline")
+            raise PublishRejectedError(
+                "Refusing to publish: the target is not a Git repository with its own .git. "
+                "Publish does not run git init, add, commit, or worktree. "
+                "Commit a repository first. No commit or branch was created."
+            )
+        top = _git(self.codebase_path, "rev-parse", "--show-toplevel", check=False)
+        if top.returncode != 0 or Path(top.stdout.strip()).resolve() != self.codebase_path.resolve():
+            raise PublishRejectedError(
+                "Refusing to publish: this directory is not the root of its Git repository. "
+                "No commit or branch was created."
+            )
+        head = _git(self.codebase_path, "rev-parse", "--verify", "HEAD", check=False)
+        if head.returncode != 0:
+            raise PublishRejectedError(
+                "Refusing to publish: this Git repository has no commit on HEAD. "
+                "Publish does not create a baseline commit, so clean and smudge filters are not run. "
+                "Commit once, then retry. No commit or branch was created."
+            )
 
     def _reject_executable_filters(self) -> None:
         """hooksPath does not stop clean/smudge filters. Refuse them before checkout."""
@@ -205,7 +216,7 @@ class SprintWorkspace:
                 "Refusing to publish: .git/config defines a clean/smudge filter. "
                 "core.hooksPath does not disable filters, so checkout and git add would run "
                 "repository commands on the host. Remove the [filter] section and retry. "
-                "Nothing was committed."
+                "No commit or branch was created."
             )
         for attributes in self.codebase_path.rglob(".gitattributes"):
             if ".git" in attributes.parts:
@@ -214,7 +225,7 @@ class SprintWorkspace:
             if re.search(r"(^|\s)filter=", text):
                 raise PublishRejectedError(
                     "Refusing to publish: .gitattributes requests a git filter. "
-                    "Publish does not run clean or smudge commands. Nothing was committed."
+                    "Publish does not run clean or smudge commands. No commit or branch was created."
                 )
 
     @property

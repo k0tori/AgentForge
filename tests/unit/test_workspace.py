@@ -85,6 +85,10 @@ def test_publish_commits_a_branch_and_leaves_the_worktree(tmp_path: Path) -> Non
     codebase = tmp_path / "codebase"
     codebase.mkdir()
     (codebase / "existing.py").write_text("x = 1")
+    subprocess.run(["git", "init", "-b", "main"], cwd=codebase, check=True, capture_output=True)
+    git = ["git", "-c", "user.email=test@local", "-c", "user.name=test", "-c", "commit.gpgsign=false"]
+    subprocess.run([*git, "add", "-A"], cwd=codebase, check=True, capture_output=True)
+    subprocess.run([*git, "commit", "-m", "base"], cwd=codebase, check=True, capture_output=True)
 
     ws = SprintWorkspace(str(codebase), "task 42", 1)
     workspace_path = ws.create()
