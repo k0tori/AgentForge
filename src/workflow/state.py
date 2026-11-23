@@ -56,7 +56,9 @@ class AgentState(TypedDict, total=False):
     result_branch: str  # Git branch that received a passing run
     final_verdict: str | None  # Sprint-level verdict (report only, not routing)
     sensors_passed: bool  # pytest and ruff both exited 0; required to end the loop
-    error: str | None  # Error message if task failed
+    error: str | None  # Safe error message if the task failed
+    error_code: str | None  # Stable failure code, safe to store and stream
+    degradations: list  # Optional subsystems that were skipped, such as retrieval
     cost_tracker: object  # CostTracker instance (typed as object to avoid circular import)
     cost_breakdown: dict  # Serialized per-role cost breakdown for API response
     trace_collector: object  # Live TraceCollector for this run

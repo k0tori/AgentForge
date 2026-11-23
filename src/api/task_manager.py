@@ -60,6 +60,7 @@ class TaskState(BaseModel):
     completed_at: datetime | None = None
     result: dict[str, Any] | None = None
     error: str | None = None
+    error_code: str | None = None
     events: list[TaskEvent] = Field(default_factory=list)
     idempotency_key: str | None = None
     request_hash: str | None = None
@@ -296,14 +297,28 @@ class TaskManager:
         self._tasks[task_id].completed_at = datetime.now(UTC)
         self._persist(self._tasks[task_id])
 
-    def set_error(self, task_id: uuid.UUID, error: str) -> None:
-        """Set task error."""
+    def set_error(
+        self,
+        task_id: uuid.UUID,
+        error: str,
+        *,
+        code: str | None = None,
+        result: dict[str, Any] | None = None,
+    ) -> None:
+        """Record a failure. An interrupted task stays interrupted."""
+        from src.llm.redact import sanitize
+
         self._require_owner()
-        if task_id in self._tasks:
-            self._tasks[task_id].error = error
-            self._tasks[task_id].status = TaskStatus.FAILED
-            self._tasks[task_id].completed_at = datetime.now(UTC)
-            self._persist(self._tasks[task_id])
+        task = self._tasks.get(task_id)
+        if task is None or task.status == TaskStatus.INTERRUPTED:
+            return
+        task.error = sanitize(error)
+        task.error_code = code
+        if result is not None:
+            task.result = result
+        task.status = TaskStatus.FAILED
+        task.completed_at = datetime.now(UTC)
+        self._persist(task)
 
     async def emit_event(self, task_id: uuid.UUID, event: TaskEvent) -> None:
         """Emit an SSE event for a task."""
@@ -327,6 +342,7 @@ class TaskManager:
                     "status": task.status.value,
                     "result": task.result,
                     "error": task.error,
+                    "error_code": task.error_code,
                 },
             )
             return
@@ -346,14 +362,15 @@ class TaskManager:
                 # Yield final event
                 yield TaskEvent(
                     event="task_complete",
-                    data={
-                        "task_id": str(task_id),
-                        "status": task.status.value,
-                        "result": task.result,
-                        "error": task.error,
-                    },
-                )
-                break
+                data={
+                    "task_id": str(task_id),
+                    "status": task.status.value,
+                    "result": task.result,
+                    "error": task.error,
+                    "error_code": task.error_code,
+                },
+            )
+            break
 
 
 # Global task manager instance

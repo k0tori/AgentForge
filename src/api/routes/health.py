@@ -13,15 +13,17 @@ router = APIRouter(tags=["health"])
 @router.get("/api/v1/health")
 async def health_check() -> dict:
     """Health check: verify PostgreSQL and Redis connectivity."""
-    result: dict = {"status": "healthy", "postgres": False, "redis": False}
+    result: dict = {"status": "healthy", "postgres": False, "redis": False, "retrieval": "unavailable"}
 
     # Check PostgreSQL
     try:
         async with async_session_factory() as session:
             await session.execute(text("SELECT 1"))
         result["postgres"] = True
+        result["retrieval"] = "available"
     except Exception:
         result["status"] = "degraded"
+        result["retrieval"] = "unavailable"
 
     # Check Redis (async)
     try:

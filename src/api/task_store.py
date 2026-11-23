@@ -13,7 +13,7 @@ from src.api.task_manager import TaskEvent, TaskState, TaskStatus
 
 _COLUMNS = (
     "task_id, status, intent, codebase_path, created_at, completed_at, "
-    "result_json, error, events_json, idempotency_key, request_hash"
+    "result_json, error, error_code, events_json, idempotency_key, request_hash"
 )
 
 
@@ -39,6 +39,7 @@ class SqliteTaskStore:
                 completed_at TEXT,
                 result_json TEXT,
                 error TEXT,
+                error_code TEXT,
                 events_json TEXT NOT NULL,
                 idempotency_key TEXT UNIQUE,
                 request_hash TEXT
@@ -48,6 +49,8 @@ class SqliteTaskStore:
         columns = {row[1] for row in self._conn.execute("PRAGMA table_info(tasks)")}
         if "request_hash" not in columns:
             self._conn.execute("ALTER TABLE tasks ADD COLUMN request_hash TEXT")
+        if "error_code" not in columns:
+            self._conn.execute("ALTER TABLE tasks ADD COLUMN error_code TEXT")
         self._conn.commit()
 
     def acquire_owner(self) -> bool:
@@ -88,6 +91,7 @@ class SqliteTaskStore:
             task.completed_at.isoformat() if task.completed_at else None,
             json.dumps(task.result) if task.result is not None else None,
             task.error,
+            task.error_code,
             json.dumps([event.model_dump(mode="json") for event in task.events]),
             task.idempotency_key,
             task.request_hash,
@@ -97,13 +101,14 @@ class SqliteTaskStore:
                 """
                 INSERT INTO tasks (
                     task_id, status, intent, codebase_path, created_at, completed_at,
-                    result_json, error, events_json, idempotency_key, request_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    result_json, error, error_code, events_json, idempotency_key, request_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     status=excluded.status,
                     completed_at=excluded.completed_at,
                     result_json=excluded.result_json,
                     error=excluded.error,
+                    error_code=excluded.error_code,
                     events_json=excluded.events_json,
                     request_hash=excluded.request_hash
                 """,
@@ -147,7 +152,7 @@ def _parse_dt(value: str | None) -> datetime | None:
 
 
 def _row_to_state(row: tuple) -> TaskState:
-    events = [TaskEvent.model_validate(item) for item in json.loads(row[8])]
+    events = [TaskEvent.model_validate(item) for item in json.loads(row[9])]
     return TaskState(
         task_id=row[0],
         status=TaskStatus(row[1]),
@@ -157,7 +162,8 @@ def _row_to_state(row: tuple) -> TaskState:
         completed_at=_parse_dt(row[5]),
         result=json.loads(row[6]) if row[6] else None,
         error=row[7],
+        error_code=row[8],
         events=events,
-        idempotency_key=row[9],
-        request_hash=row[10],
+        idempotency_key=row[10],
+        request_hash=row[11],
     )

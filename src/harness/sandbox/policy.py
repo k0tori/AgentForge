@@ -116,6 +116,8 @@ def build_docker_run(workspace: str, argv: list[str], *, name: str, attempt_id: 
     command = [
         "docker",
         "run",
+        "--pull",
+        "never",
         "--name",
         name,
         "--rm",

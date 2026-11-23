@@ -13,7 +13,9 @@ from sse_starlette.sse import EventSourceResponse
 from src.api.schemas.task import TaskCreateRequest, TaskCreateResponse, TaskStatusResponse
 from src.api.task_manager import IdempotencyConflictError, TaskEvent, TaskStatus, WorkerBusyError, task_manager
 from src.config import settings
+from src.llm.redact import sanitize
 from src.workflow.deterministic import run_deterministic_change
+from src.workflow.failures import classify_exception, outcome_failed
 from src.workflow.graph import run_task
 
 logger = logging.getLogger(__name__)
@@ -143,6 +145,7 @@ async def _execute_task(
     options: dict | None = None,
 ) -> None:
     """Execute a task in the background. Deterministic mode does not call a model."""
+    selected = (options or {}).get("executor", "pge")
     try:
         # Update status to running
         task_manager.update_status(task_id, TaskStatus.RUNNING)
@@ -157,7 +160,6 @@ async def _execute_task(
             TaskEvent(event="step_update", data={"agent": "planner", "step": "starting"}),
         )
 
-        selected = (options or {}).get("executor", "pge")
         if selected == "deterministic":
             result = await run_deterministic_change(
                 codebase_path=codebase_path,
@@ -175,36 +177,58 @@ async def _execute_task(
                 codebase_path=codebase_path,
                 task_id=str(task_id),
             )
-            await task_manager.emit_event(
-                task_id,
-                TaskEvent(event="step_update", data={"agent": "evaluator", "step": "complete"}),
-            )
+            if not outcome_failed(result):
+                await task_manager.emit_event(
+                    task_id,
+                    TaskEvent(event="step_update", data={"agent": "evaluator", "step": "complete"}),
+                )
 
-        # Set result
         trace = result.get("execution_trace", [])
         summary = result.get("execution_trace_summary")
         if summary is None:
             summary = len(trace) if isinstance(trace, list) else 0
-        task_manager.set_result(task_id, {
+        public = {
             "final_verdict": result.get("final_verdict"),
+            "error_code": result.get("error_code"),
             "acceptance": result.get("acceptance"),
             "demo_completed": bool(result.get("demo_completed", False)),
             "executor": result.get("executor", "pge"),
             "note": result.get("note"),
+            "degradations": result.get("degradations") or [],
             "sprint_contract": result.get("sprint_contract", []),
             "code_diff": result.get("code_diff", ""),
             "execution_trace_summary": summary,
             "cost_breakdown": result.get("cost_breakdown", {}),
-            "trace": result.get("trace"),
+            "trace": None if outcome_failed(result) else result.get("trace"),
             "result_branch": result.get("result_branch"),
-        })
+        }
+        if selected != "deterministic" and outcome_failed(result):
+            message = sanitize(str(result.get("error") or result.get("note") or "The task failed."))
+            code = result.get("error_code") or "task_failed"
+            task_manager.set_error(task_id, message, code=code, result=public)
+            await task_manager.emit_event(
+                task_id,
+                TaskEvent(event="error", data={"error": message, "error_code": code}),
+            )
+            return
+        task_manager.set_result(task_id, public)
 
-    except Exception as e:
-        # Set error
-        task_manager.set_error(task_id, str(e))
+    except Exception as exc:
+        if selected == "deterministic" and isinstance(exc, ValueError):
+            code, message = "demo_rejected", sanitize(str(exc))
+        else:
+            code, message = classify_exception(exc)
+        task_manager.set_error(task_id, message, code=code, result={
+            "final_verdict": "FAIL",
+            "error_code": code,
+            "acceptance": "failed",
+            "executor": (options or {}).get("executor", "pge"),
+            "demo_completed": False,
+            "note": message,
+        })
         await task_manager.emit_event(
             task_id,
-            TaskEvent(event="error", data={"error": str(e)}),
+            TaskEvent(event="error", data={"error": message, "error_code": code}),
         )
 
 
@@ -220,6 +244,7 @@ async def get_task(task_id: uuid.UUID) -> TaskStatusResponse:
         status=task.status.value,
         result=task.result,
         error=task.error,
+        error_code=task.error_code,
     )
 
 

@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await init_db()
         await init_vector_tables()
     except Exception:
-        logger.exception("Postgres init failed; task API remains available")
+        logger.warning("Postgres init failed; retrieval is unavailable. Task API remains available")
         app.state.index_task = None
         logger.info("AgentForge application started without vector storage")
         yield
@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             result = await index_all()
             logger.info("RAG indexing complete: %s", result)
         except Exception:
-            logger.exception("RAG indexing failed (non-fatal)")
+            logger.warning("RAG indexing failed; retrieval is degraded for this process")
 
     app.state.index_task = asyncio.create_task(_index_background())
     logger.info("AgentForge application started")

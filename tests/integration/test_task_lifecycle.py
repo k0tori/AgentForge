@@ -119,7 +119,8 @@ async def test_failed_change_does_not_publish_or_edit_the_worktree(task_db: Path
             finished = await _wait_terminal(client, created.json()["task_id"])
         assert finished["status"] == "failed"
         assert "relative .py" in finished["error"]
-        assert finished["result"] is None
+        assert finished["result"]["demo_completed"] is False
+        assert not finished["result"].get("result_branch")
         assert not (codebase.parent / "escape.py").exists()
     finally:
         shutil.rmtree(codebase, ignore_errors=True)

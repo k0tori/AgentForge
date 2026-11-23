@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     MAX_ITERATIONS: int = 10
     TOKEN_BUDGET: int = 150_000
     TIMEOUT_SECONDS: int = 300
+    LLM_TIMEOUT_SECONDS: float = 30
+    RETRIEVAL_TIMEOUT_SECONDS: float = 20
 
     # API Security (empty means no auth required in dev)
     API_KEY: str = ""
