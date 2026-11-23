@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import subprocess
 import textwrap
+import time
 import uuid
 from pathlib import Path
 
@@ -107,3 +108,36 @@ def test_container_runs_pytest_without_host_secrets_or_socket(tmp_path: Path, mo
     )
     assert leftover.stdout.strip() == ""
     assert os.environ["DEEPSEEK_API_KEY"] == "host-only-secret"
+
+
+def test_deadline_kills_the_running_container(tmp_path: Path, monkeypatch):
+    """Real container. The PGE deadline must remove it, not only mark a task failed."""
+    from src.harness.deadline import DeadlineExceededError, bind_deadline, reset_deadline
+
+    _require_docker()
+    _build_image()
+    monkeypatch.setattr("src.config.settings.SANDBOX_IMAGE", IMAGE)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    attempt = f"stop-{uuid.uuid4().hex[:8]}"
+    token = bind_deadline(2)
+    started = time.monotonic()
+    try:
+        with pytest.raises(DeadlineExceededError):
+            execute_in_docker(
+                ["python", "-c", "import time; time.sleep(30)"],
+                workspace=str(workspace),
+                timeout=60,
+                attempt_id=attempt,
+            )
+    finally:
+        reset_deadline(token)
+    assert time.monotonic() - started < 15
+    leftover = subprocess.run(
+        ["docker", "ps", "-aq", "--filter", f"label=agentforge.attempt={attempt}"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert leftover.stdout.strip() == ""

@@ -205,14 +205,14 @@ REDIS_URL=redis://localhost:6379
 ### 启动基础设施
 
 ```bash
-docker-compose up -d
+docker compose up -d postgres redis
 ```
 
 这会启动：
 - **PostgreSQL**（pgvector 扩展）— 端口 5432
 - **Redis** — 端口 6379
 
-这不会构建沙箱镜像。镜像在 profile `sandbox` 里，见 `docs/sandbox.md`：
+不带服务名的 `docker compose up` 还会启动 `api`，因为 `api` 没有 profile。两种写法都不会构建沙箱镜像：`sandbox` 在 profile `sandbox` 里，也不是 `api` 的依赖。构建命令见 `docs/sandbox.md`：
 
 ```bash
 docker compose --profile sandbox build sandbox

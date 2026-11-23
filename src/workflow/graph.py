@@ -95,13 +95,42 @@ def publish_branch(state: AgentState) -> AgentState:
         int(state.get("current_sprint") or 1),
     )
     workspace.path = Path(sprint_workspace)
+    from src.harness.deadline import DeadlineExceededError, deadline_exceeded
+    from src.llm.errors import MESSAGES
+
+    if deadline_exceeded():
+        return {
+            **state,
+            "error": MESSAGES["execution_timeout"],
+            "error_code": "execution_timeout",
+            "final_verdict": "FAIL",
+            "result_branch": "",
+        }
     try:
         branch = workspace.publish()
-    except Exception as exc:
-        logger.exception("Failed to publish sprint workspace")
-        return {**state, "error": f"Failed to publish branch: {exc}", "final_verdict": "FAIL"}
+    except DeadlineExceededError:
+        logger.error("Refusing to accept a branch after the PGE deadline")
+        return {
+            **state,
+            "error": MESSAGES["execution_timeout"],
+            "error_code": "execution_timeout",
+            "final_verdict": "FAIL",
+            "result_branch": "",
+        }
+    except Exception:
+        logger.error("Failed to publish sprint workspace")
+        return {**state, "error": "Failed to publish branch", "final_verdict": "FAIL"}
     finally:
         workspace.discard()
+    if deadline_exceeded():
+        logger.error("Publish finished after the PGE deadline and was not accepted")
+        return {
+            **state,
+            "error": MESSAGES["execution_timeout"],
+            "error_code": "execution_timeout",
+            "final_verdict": "FAIL",
+            "result_branch": "",
+        }
     logger.info("Published passing run to %s", branch)
     return {**state, "result_branch": branch, "error": None}
 
@@ -183,6 +212,7 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
     import uuid
 
     from src.config import settings
+    from src.harness.deadline import bind_deadline, deadline_exceeded, reset_deadline
     from src.workflow.failures import TaskFailureError, failed_state
     from src.workflow.preflight import assess_retrieval, require_pge_ready
 
@@ -197,6 +227,7 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
         return failed_state(task_id=task_id, codebase_path=codebase_path, code=exc.code, message=str(exc))
 
     degradations = await assess_retrieval(codebase_path)
+    deadline_token = bind_deadline(settings.TIMEOUT_SECONDS)
     project_token = project_path_var.set(os.path.abspath(codebase_path))
     cost_tracker = CostTracker()
     collector = TraceCollector()
@@ -235,8 +266,17 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
                 code="execution_timeout",
                 degradations=degradations,
             )
+        if deadline_exceeded() or final_state.get("error_code") == "execution_timeout":
+            logger.error("Task %s finished after the deadline and was not accepted", task_id)
+            return failed_state(
+                task_id=task_id,
+                codebase_path=codebase_path,
+                code="execution_timeout",
+                degradations=degradations,
+            )
     finally:
         project_path_var.reset(project_token)
+        reset_deadline(deadline_token)
 
     final_state["degradations"] = degradations
     final_state = _settle_outcome(final_state)

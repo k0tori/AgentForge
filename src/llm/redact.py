@@ -12,6 +12,19 @@ _URL_PASSWORD = re.compile(r"(://[^:/\s]+:)([^@/\s]+)@")
 _MAX_LEN = 500
 
 
+def sanitize_payload(value: object) -> object:
+    """Sanitize every string in a JSON-like value before it is stored or streamed."""
+    if isinstance(value, str):
+        return sanitize(value)
+    if isinstance(value, dict):
+        return {str(key): sanitize_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [sanitize_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return [sanitize_payload(item) for item in value]
+    return value
+
+
 def sanitize(text: str) -> str:
     """Return text with known secrets removed. The result is capped."""
     redacted = text or ""

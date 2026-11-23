@@ -22,6 +22,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from src.harness.deadline import DeadlineExceededError, deadline_exceeded
+
 logger = logging.getLogger(__name__)
 _GIT_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT")
 
@@ -96,11 +98,18 @@ class SprintWorkspace:
         Returns the branch name. The temp workspace is left in place so the caller
         can discard it after reading the diff.
         """
+        if deadline_exceeded():
+            raise DeadlineExceededError("PGE deadline exceeded before publish")
         if not self.path.is_dir():
             raise FileNotFoundError(f"Sprint workspace does not exist: {self.path}")
         branch = _branch_name(self.task_id)
         with _publish_lock(self.codebase_path):
-            return self._publish_locked(branch)
+            if deadline_exceeded():
+                raise DeadlineExceededError("PGE deadline exceeded before publish")
+            branch_name = self._publish_locked(branch)
+        if deadline_exceeded():
+            raise DeadlineExceededError("PGE deadline exceeded during publish")
+        return branch_name
 
     def _publish_locked(self, branch: str) -> str:
         self._ensure_repo()
@@ -147,7 +156,17 @@ def _branch_name(task_id: str) -> str:
     return f"agentforge/{safe}"
 
 
+def _writes_git_state(args: tuple[str, ...]) -> bool:
+    if not args:
+        return False
+    if args[0] in {"commit", "add", "init"}:
+        return True
+    return args[0] == "worktree" and len(args) > 1 and args[1] == "add"
+
+
 def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    if _writes_git_state(args) and deadline_exceeded():
+        raise DeadlineExceededError("PGE deadline exceeded before git")
     command = [
         "git",
         "-c", "user.email=agentforge@local",

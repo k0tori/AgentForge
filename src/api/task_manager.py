@@ -290,9 +290,11 @@ class TaskManager:
         self._require_owner()
         if task_id not in self._tasks:
             return
-        if self._tasks[task_id].status == TaskStatus.INTERRUPTED:
+        if self._tasks[task_id].status in (TaskStatus.INTERRUPTED, TaskStatus.FAILED):
             return
-        self._tasks[task_id].result = result
+        from src.llm.redact import sanitize_payload
+
+        self._tasks[task_id].result = sanitize_payload(result)
         self._tasks[task_id].status = TaskStatus.COMPLETED
         self._tasks[task_id].completed_at = datetime.now(UTC)
         self._persist(self._tasks[task_id])
@@ -306,7 +308,7 @@ class TaskManager:
         result: dict[str, Any] | None = None,
     ) -> None:
         """Record a failure. An interrupted task stays interrupted."""
-        from src.llm.redact import sanitize
+        from src.llm.redact import sanitize, sanitize_payload
 
         self._require_owner()
         task = self._tasks.get(task_id)
@@ -315,19 +317,26 @@ class TaskManager:
         task.error = sanitize(error)
         task.error_code = code
         if result is not None:
-            task.result = result
+            task.result = sanitize_payload(result)
         task.status = TaskStatus.FAILED
         task.completed_at = datetime.now(UTC)
         self._persist(task)
 
     async def emit_event(self, task_id: uuid.UUID, event: TaskEvent) -> None:
         """Emit an SSE event for a task."""
+        from src.llm.redact import sanitize_payload
+
         self._require_owner()
+        safe = TaskEvent(
+            event=event.event,
+            data=sanitize_payload(event.data) if isinstance(event.data, dict) else {},
+            timestamp=event.timestamp,
+        )
         if task_id in self._tasks:
-            self._tasks[task_id].events.append(event)
+            self._tasks[task_id].events.append(safe)
             self._persist(self._tasks[task_id])
         if task_id in self._event_queues:
-            await self._event_queues[task_id].put(event)
+            await self._event_queues[task_id].put(safe)
 
     async def event_stream(self, task_id: uuid.UUID):
         """Yield SSE events for a task."""

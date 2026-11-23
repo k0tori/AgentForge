@@ -27,7 +27,9 @@ docker build -f Dockerfile.sandbox -t agentforge-sandbox:latest .
 - 不继承宿主环境变量（没有 API key）
 - 网络是 `none`
 - 丢掉全部 Linux capabilities，并设置 `no-new-privileges`
-- 内存、CPU、进程数有上限；超时后容器被删除
+- 内存、CPU、进程数有上限；命令超时或 PGE 截止时间到达后，这次启动的容器会被 `docker rm -f` 删除
+
+PGE 截止时间会取消正在等待的协程，并在下一次检查时停止新的 git 命令和发布。已经进入 `subprocess` 的那一条 git 命令不会被杀掉；它返回之后，结果不会被记成 PASS，后续的 `set_result` 也不能把 `failed` 改回 `completed`。超时不等于把所有线程都停掉。
 
 文件读写仍由宿主上的工具完成，但只写 sprint 工作区。真正执行测试和 lint 的是容器里的 Python。
 

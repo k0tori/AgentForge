@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 
 from langchain_core.messages import AIMessage, BaseMessage
 
+from src.harness.deadline import DeadlineExceededError
 from src.harness.sandbox.errors import SandboxUnavailableError
 from src.llm.client import LLMClient
 from src.llm.errors import MESSAGES, ModelCallError
@@ -39,6 +40,9 @@ class BaseAgent(ABC):
         except SandboxUnavailableError as exc:
             logger.error("Agent %s failed with %s", self.__class__.__name__, exc.code)
             return {**state, "error": str(exc), "error_code": exc.code}
+        except DeadlineExceededError:
+            logger.error("Agent %s stopped at the PGE deadline", self.__class__.__name__)
+            return {**state, "error": MESSAGES["execution_timeout"], "error_code": "execution_timeout"}
         except TimeoutError:
             logger.error("Agent %s timed out", self.__class__.__name__)
             return {**state, "error": MESSAGES["model_timeout"], "error_code": "model_timeout"}

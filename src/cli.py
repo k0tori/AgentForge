@@ -20,7 +20,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     from src.llm.redact import sanitize
+    from src.logging_config import setup_logging
     from src.workflow.failures import classify_exception, outcome_failed
+
+    setup_logging()
 
     args = build_parser().parse_args(argv)
     try:
@@ -38,5 +41,6 @@ def main(argv: list[str] | None = None) -> None:
         "degradations": state.get("degradations") or [],
         "result_branch": state.get("result_branch"),
     }
-    sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
+    rendered = sanitize(json.dumps(summary, ensure_ascii=False, indent=2))
+    sys.stdout.write(rendered + "\n")
     raise SystemExit(1 if failed else 0)

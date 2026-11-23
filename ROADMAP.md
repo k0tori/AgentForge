@@ -59,6 +59,8 @@
 
 故障注入在 `tests/unit/test_failure_reporting.py` 和 `tests/integration/test_pge_failures.py`。它们不调用付费模型，也不代替 `tests/sandbox` 的真实容器证据。
 
+超时的边界：截止时间会取消正在 `await` 的协程，并让本次沙箱子进程在轮询中被杀掉、容器被删除。已经进入 `subprocess` 的 git 命令会跑完这一条，但不会再开始下一条，也不会把任务收成 PASS。它不会把任意后台线程停掉。
+
 M2 还没有验收。
 
 ## 已知风险

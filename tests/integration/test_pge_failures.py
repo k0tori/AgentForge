@@ -117,3 +117,27 @@ async def test_execution_timeout_fails_the_task(task_db: Path, monkeypatch):
     assert finished["error_code"] == "execution_timeout"
     assert finished["result"]["final_verdict"] == "FAIL"
     assert "sk-injected" not in str(finished)
+
+
+@pytest.mark.asyncio
+async def test_retrieval_degradation_is_visible_on_get(task_db: Path, monkeypatch):
+    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "sk-injected-secret-value")
+    monkeypatch.setattr(settings, "SANDBOX_MODE", "host")
+
+    async def down() -> bool:
+        return False
+
+    class _Pass:
+        async def ainvoke(self, state):
+            return {**state, "final_verdict": "PASS", "error": None}
+
+    monkeypatch.setattr("src.workflow.preflight.storage_available", down)
+    monkeypatch.setattr("src.workflow.graph.get_compiled_graph", lambda: _Pass())
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", timeout=5) as client:
+        created = await client.post("/api/v1/tasks/", json=_body())
+        finished = await _wait(client, created.json()["task_id"])
+    assert finished["status"] == "completed"
+    assert finished["result"]["degradations"][0]["code"] == "retrieval_unavailable"
+    assert "sk-injected" not in str(finished)
+    assert "://" not in finished["result"]["degradations"][0]["message"]
