@@ -35,3 +35,4 @@ class TaskStatusResponse(BaseModel):
     task_id: uuid.UUID
     status: str
     result: dict[str, Any] | None = None
+    error: str | None = None

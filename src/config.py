@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     # Application
     LOG_LEVEL: str = "INFO"
     TOY_REPO_PATH: str = "./toy-repo"
+    TASK_DB_PATH: str = ".agentforge/tasks.sqlite"
 
     # Embedding
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"

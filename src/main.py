@@ -13,6 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.api.routes.health import router as health_router
 from src.api.routes.tasks import router as tasks_router
+from src.api.task_manager import task_manager
 from src.config import settings
 from src.logging_config import setup_logging
 from src.storage.cache import close_redis
@@ -48,8 +49,20 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: initialize storage on startup, close on shutdown."""
     logger.info("Starting AgentForge application")
-    await init_db()
-    await init_vector_tables()
+    interrupted = task_manager.bind(settings.TASK_DB_PATH)
+    if interrupted:
+        logger.info("Marked %s in-flight tasks interrupted", interrupted)
+    try:
+        await init_db()
+        await init_vector_tables()
+    except Exception:
+        logger.exception("Postgres init failed; task API remains available")
+        app.state.index_task = None
+        logger.info("AgentForge application started without vector storage")
+        yield
+        logger.info("Shutting down AgentForge application")
+        await close_redis()
+        return
 
     async def _index_background() -> None:
         try:

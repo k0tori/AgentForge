@@ -11,6 +11,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from src.api.schemas.task import TaskCreateRequest, TaskCreateResponse, TaskStatusResponse
 from src.api.task_manager import TaskEvent, TaskStatus, task_manager
+from src.workflow.deterministic import run_deterministic_change
 from src.workflow.graph import run_task
 
 logger = logging.getLogger(__name__)
@@ -50,15 +51,25 @@ async def create_task(request: TaskCreateRequest) -> TaskCreateResponse:
     codebase_path = request.codebase.get("path", "./toy-repo")
     codebase_path = _validate_codebase_path(codebase_path)
 
+    options = request.options or {}
+    executor = options.get("executor", "pge")
+    if executor not in ("pge", "deterministic"):
+        raise HTTPException(status_code=400, detail="executor must be pge or deterministic")
+    idempotency_key = options.get("idempotency_key")
+    if idempotency_key is not None and not isinstance(idempotency_key, str):
+        raise HTTPException(status_code=400, detail="idempotency_key must be a string")
+
     task = task_manager.create_task(
         intent=request.intent,
         codebase_path=codebase_path,
+        idempotency_key=idempotency_key,
     )
-
-    # Start background execution with proper error handling
-    bg_task = asyncio.create_task(_execute_task(task.task_id, request.intent, codebase_path))
-    _background_tasks.add(bg_task)
-    bg_task.add_done_callback(_background_tasks.discard)
+    if task_manager.claim_execution(task.task_id):
+        bg_task = asyncio.create_task(
+            _execute_task(task.task_id, request.intent, codebase_path, options)
+        )
+        _background_tasks.add(bg_task)
+        bg_task.add_done_callback(_background_tasks.discard)
 
     return TaskCreateResponse(
         task_id=task.task_id,
@@ -67,8 +78,13 @@ async def create_task(request: TaskCreateRequest) -> TaskCreateResponse:
     )
 
 
-async def _execute_task(task_id: uuid.UUID, intent: str, codebase_path: str) -> None:
-    """Execute PGE task in background."""
+async def _execute_task(
+    task_id: uuid.UUID,
+    intent: str,
+    codebase_path: str,
+    options: dict | None = None,
+) -> None:
+    """Execute a task in the background. Deterministic mode does not call a model."""
     try:
         # Update status to running
         task_manager.update_status(task_id, TaskStatus.RUNNING)
@@ -83,12 +99,19 @@ async def _execute_task(task_id: uuid.UUID, intent: str, codebase_path: str) -> 
             TaskEvent(event="step_update", data={"agent": "planner", "step": "starting"}),
         )
 
-        # Run PGE flow
-        result = await run_task(
-            request=intent,
-            codebase_path=codebase_path,
-            task_id=str(task_id),
-        )
+        selected = (options or {}).get("executor", "pge")
+        if selected == "deterministic":
+            result = await run_deterministic_change(
+                codebase_path=codebase_path,
+                task_id=str(task_id),
+                change=(options or {}).get("change") or {},
+            )
+        else:
+            result = await run_task(
+                request=intent,
+                codebase_path=codebase_path,
+                task_id=str(task_id),
+            )
 
         # Emit completion event
         await task_manager.emit_event(
@@ -97,11 +120,17 @@ async def _execute_task(task_id: uuid.UUID, intent: str, codebase_path: str) -> 
         )
 
         # Set result
+        trace = result.get("execution_trace", [])
+        summary = result.get("execution_trace_summary")
+        if summary is None:
+            summary = len(trace) if isinstance(trace, list) else 0
         task_manager.set_result(task_id, {
             "final_verdict": result.get("final_verdict"),
+            "executor": result.get("executor", "pge"),
+            "note": result.get("note"),
             "sprint_contract": result.get("sprint_contract", []),
             "code_diff": result.get("code_diff", ""),
-            "execution_trace_summary": len(result.get("execution_trace", [])),
+            "execution_trace_summary": summary,
             "cost_breakdown": result.get("cost_breakdown", {}),
             "trace": result.get("trace"),
             "result_branch": result.get("result_branch"),
@@ -127,6 +156,7 @@ async def get_task(task_id: uuid.UUID) -> TaskStatusResponse:
         task_id=task.task_id,
         status=task.status.value,
         result=task.result,
+        error=task.error,
     )
 
 

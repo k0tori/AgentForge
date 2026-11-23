@@ -16,9 +16,22 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+_PUBLISH_LOCKS: dict[str, threading.Lock] = {}
+_PUBLISH_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _PUBLISH_LOCKS_GUARD:
+        lock = _PUBLISH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _PUBLISH_LOCKS[key] = lock
+        return lock
 
 # Patterns excluded when seeding or merging the workspace
 IGNORE_PATTERNS = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".pytest_cache", "node_modules")
@@ -65,6 +78,10 @@ class SprintWorkspace:
         if not self.path.is_dir():
             raise FileNotFoundError(f"Sprint workspace does not exist: {self.path}")
         branch = _branch_name(self.task_id)
+        with _lock_for(self.codebase_path):
+            return self._publish_locked(branch)
+
+    def _publish_locked(self, branch: str) -> str:
         self._ensure_repo()
         worktree = Path(tempfile.mkdtemp(prefix="agentforge_publish_"))
         try:
