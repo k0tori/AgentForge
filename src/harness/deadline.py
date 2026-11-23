@@ -15,6 +15,10 @@ _deadline: ContextVar[float | None] = ContextVar("agentforge_deadline", default=
 class DeadlineExceededError(TimeoutError):
     """The PGE deadline passed. Further publish and success writes must not proceed."""
 
+    def __init__(self, message: str = "PGE deadline exceeded", *, branch: str | None = None) -> None:
+        super().__init__(message)
+        self.branch = branch
+
 
 def bind_deadline(seconds: float) -> Token:
     return _deadline.set(time.monotonic() + seconds)

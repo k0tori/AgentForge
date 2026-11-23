@@ -141,3 +141,43 @@ def test_deadline_kills_the_running_container(tmp_path: Path, monkeypatch):
         check=False,
     )
     assert leftover.stdout.strip() == ""
+
+
+def test_task_database_volume_survives_a_new_container():
+    """Compose stores tasks at /var/lib/agentforge. A new container must still see the file."""
+    _require_docker()
+    _build_image()
+    volume = f"agentforge-tasks-check-{uuid.uuid4().hex[:8]}"
+    subprocess.run(["docker", "volume", "create", volume], check=True, capture_output=True, text=True)
+    try:
+        write = subprocess.run(
+            [
+                "docker", "run", "--rm", "--user", "0",
+                "-v", f"{volume}:/var/lib/agentforge",
+                IMAGE,
+                "python", "-c",
+                "open('/var/lib/agentforge/tasks.sqlite','w').write('persisted')",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert write.returncode == 0, write.stderr
+        read = subprocess.run(
+            [
+                "docker", "run", "--rm", "--user", "0",
+                "-v", f"{volume}:/var/lib/agentforge",
+                IMAGE,
+                "python", "-c",
+                "print(open('/var/lib/agentforge/tasks.sqlite').read())",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert read.returncode == 0, read.stderr
+        assert read.stdout.strip() == "persisted"
+    finally:
+        subprocess.run(["docker", "volume", "rm", volume], capture_output=True, text=True, check=False)

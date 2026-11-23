@@ -108,14 +108,19 @@ def publish_branch(state: AgentState) -> AgentState:
         }
     try:
         branch = workspace.publish()
-    except DeadlineExceededError:
+    except DeadlineExceededError as exc:
         logger.error("Refusing to accept a branch after the PGE deadline")
+        branch = exc.branch or ""
+        message = MESSAGES["execution_timeout"]
+        if branch:
+            message += f" Branch {branch} was left for inspection and is not an accepted result."
         return {
             **state,
-            "error": MESSAGES["execution_timeout"],
+            "error": message,
             "error_code": "execution_timeout",
             "final_verdict": "FAIL",
-            "result_branch": "",
+            "result_branch": branch,
+            "residual_branch": branch,
         }
     except Exception:
         logger.error("Failed to publish sprint workspace")
@@ -124,12 +129,17 @@ def publish_branch(state: AgentState) -> AgentState:
         workspace.discard()
     if deadline_exceeded():
         logger.error("Publish finished after the PGE deadline and was not accepted")
+        message = (
+            f"{MESSAGES['execution_timeout']} Branch {branch} was left for inspection "
+            "and is not an accepted result."
+        )
         return {
             **state,
-            "error": MESSAGES["execution_timeout"],
+            "error": message,
             "error_code": "execution_timeout",
             "final_verdict": "FAIL",
-            "result_branch": "",
+            "result_branch": branch,
+            "residual_branch": branch,
         }
     logger.info("Published passing run to %s", branch)
     return {**state, "result_branch": branch, "error": None}
@@ -258,13 +268,14 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
         graph = get_compiled_graph()
         try:
             final_state = await asyncio.wait_for(graph.ainvoke(initial_state), timeout=settings.TIMEOUT_SECONDS)
-        except TimeoutError:
+        except TimeoutError as exc:
             logger.error("Task %s failed with execution_timeout", task_id)
             return failed_state(
                 task_id=task_id,
                 codebase_path=codebase_path,
                 code="execution_timeout",
                 degradations=degradations,
+                result_branch=getattr(exc, "branch", None),
             )
         if deadline_exceeded() or final_state.get("error_code") == "execution_timeout":
             logger.error("Task %s finished after the deadline and was not accepted", task_id)
@@ -273,6 +284,7 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
                 codebase_path=codebase_path,
                 code="execution_timeout",
                 degradations=degradations,
+                result_branch=final_state.get("result_branch") or final_state.get("residual_branch"),
             )
     finally:
         project_path_var.reset(project_token)

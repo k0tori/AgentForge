@@ -19,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    from src.llm.redact import sanitize
+    from src.llm.redact import sanitize, sanitize_delivery
     from src.logging_config import setup_logging
     from src.workflow.failures import classify_exception, outcome_failed
 
@@ -38,9 +38,17 @@ def main(argv: list[str] | None = None) -> None:
         "final_verdict": state.get("final_verdict"),
         "error_code": state.get("error_code"),
         "error": sanitize(str(state.get("error"))) if state.get("error") else None,
-        "degradations": state.get("degradations") or [],
+        "degradations": [
+            {
+                "code": item.get("code"),
+                "message": sanitize_delivery(str(item.get("message", ""))),
+            }
+            for item in (state.get("degradations") or [])
+            if isinstance(item, dict)
+        ],
         "result_branch": state.get("result_branch"),
+        "code_diff": sanitize_delivery(str(state.get("code_diff") or "")),
     }
-    rendered = sanitize(json.dumps(summary, ensure_ascii=False, indent=2))
+    rendered = json.dumps(summary, ensure_ascii=False, indent=2)
     sys.stdout.write(rendered + "\n")
     raise SystemExit(1 if failed else 0)

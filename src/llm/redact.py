@@ -13,9 +13,9 @@ _MAX_LEN = 500
 
 
 def sanitize_payload(value: object) -> object:
-    """Sanitize every string in a JSON-like value before it is stored or streamed."""
+    """Redact secrets in stored or streamed data without shortening a diff."""
     if isinstance(value, str):
-        return sanitize(value)
+        return sanitize_delivery(value)
     if isinstance(value, dict):
         return {str(key): sanitize_payload(item) for key, item in value.items()}
     if isinstance(value, list):
@@ -25,8 +25,7 @@ def sanitize_payload(value: object) -> object:
     return value
 
 
-def sanitize(text: str) -> str:
-    """Return text with known secrets removed. The result is capped."""
+def _redact(text: str) -> str:
     redacted = text or ""
     key = settings.DEEPSEEK_API_KEY.strip()
     if len(key) >= 6:
@@ -40,7 +39,17 @@ def sanitize(text: str) -> str:
         redacted = redacted.replace(value, "[redacted]")
     redacted = _SK.sub("[redacted]", redacted)
     redacted = _BEARER.sub("Bearer [redacted]", redacted)
-    redacted = _URL_PASSWORD.sub(r"\1[redacted]@", redacted)
+    return _URL_PASSWORD.sub(r"\1[redacted]@", redacted)
+
+
+def sanitize_delivery(text: str) -> str:
+    """Redact secrets and keep the rest of a diff, contract, or trace."""
+    return _redact(text)
+
+
+def sanitize(text: str) -> str:
+    """Redact secrets in a log line or error summary, then cap the length."""
+    redacted = _redact(text)
     if len(redacted) > _MAX_LEN:
         redacted = redacted[:_MAX_LEN] + "...(truncated)"
     return redacted

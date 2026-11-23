@@ -62,6 +62,8 @@ curl -s http://127.0.0.1:8000/api/v1/tasks/<task_id>
 git -C .agentforge/work/toy-copy show <result_branch>:src/ping.py
 ```
 
+结果分支是仓库 HEAD 加上这次任务相对种子快照改过的路径。`.github` 这类已跟踪的隐藏目录如果任务没改，会留在分支上。工作区里还没提交、任务也没改的文件仍留在工作区，不会被这次发布删掉，也不会自动进分支。`.env`、私钥等敏感路径不会被新加进分支；已经跟踪的敏感文件不会被这次发布悄悄删掉。仓库如果配置了 git clean/smudge filter，发布会直接拒绝，因为 `core.hooksPath` 挡不住 filter。
+
 持有写锁的进程退出后，再启动的进程仍能查到已完成结果。退出时还在 `pending` 或 `running` 的任务会变成 `interrupted`。如果 git 分支已经写出来、数据库还没记成 completed，状态也是 `interrupted`，`demo_completed` 不会变成 true，这条分支不能当成验收通过。另一个还活着的进程不会被这次启动收成 interrupted。
 
 真实模型任务不要设置 `executor`（默认 `pge`）。它需要已有的 `DEEPSEEK_API_KEY` 和 `SANDBOX_MODE=docker` 的沙箱镜像。当前环境没有这份密钥，所以模型质量仍是未验证项。API 进程在 compose 里仍然挂着 Docker socket，沙箱容器本身不挂。

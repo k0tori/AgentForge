@@ -62,9 +62,13 @@ def failed_state(
     code: str,
     message: str | None = None,
     degradations: list[dict[str, str]] | None = None,
+    result_branch: str | None = None,
 ) -> dict[str, Any]:
     """Terminal PGE state. It has no trace and no request body."""
     safe = message or MESSAGES.get(code, MESSAGES["task_failed"])
+    branch = result_branch or ""
+    if branch and "not an accepted result" not in safe:
+        safe = f"{safe} Branch {branch} was left for inspection and is not an accepted result."
     return {
         "task_id": task_id,
         "codebase_path": codebase_path,
@@ -75,7 +79,8 @@ def failed_state(
         "executor": "pge",
         "demo_completed": False,
         "degradations": degradations or [],
-        "result_branch": "",
+        "result_branch": branch,
+        "residual_branch": branch,
         "code_diff": "",
         "trace": None,
         "note": safe,

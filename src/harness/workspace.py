@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import json
 import logging
 import os
 import re
@@ -23,6 +24,16 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from src.harness.deadline import DeadlineExceededError, deadline_exceeded
+from src.harness.publish_guard import (
+    PublishRejectedError,
+    assert_delta_is_publishable,
+    assert_destination_is_safe,
+    is_sensitive_path,
+    scan_tree,
+    symlink_escapes,
+    tree_delta,
+    write_regular_file,
+)
 
 logger = logging.getLogger(__name__)
 _GIT_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT")
@@ -63,6 +74,7 @@ class SprintWorkspace:
         self.task_id = task_id
         self.sprint = sprint
         self.path = Path(tempfile.gettempdir()) / f"agentforge_sprint_{task_id}_{sprint}"
+        self.residual_branch: str | None = None
 
     def create(self, *, force_reseed: bool = True, preserve_symlinks: bool = False) -> str:
         """Seed: 把现有代码完整拷进 sprint workspace，Generator 在这个基础上改。
@@ -81,8 +93,9 @@ class SprintWorkspace:
             self.codebase_path,
             self.path,
             ignore=IGNORE_PATTERNS,
-            symlinks=preserve_symlinks,
+            symlinks=True,
         )
+        self._write_seed(scan_tree(self.path))
         logger.info("Sprint workspace seeded: %s -> %s", self.codebase_path, self.path)
         return str(self.path)
 
@@ -106,21 +119,52 @@ class SprintWorkspace:
         with _publish_lock(self.codebase_path):
             if deadline_exceeded():
                 raise DeadlineExceededError("PGE deadline exceeded before publish")
-            branch_name = self._publish_locked(branch)
+            try:
+                branch_name = self._publish_locked(branch)
+            except DeadlineExceededError as exc:
+                if exc.branch is None and self.residual_branch:
+                    raise DeadlineExceededError(str(exc), branch=self.residual_branch) from None
+                raise
+            except PublishRejectedError as exc:
+                if exc.branch is None and self.residual_branch:
+                    raise PublishRejectedError(str(exc), branch=self.residual_branch) from None
+                raise
         if deadline_exceeded():
-            raise DeadlineExceededError("PGE deadline exceeded during publish")
+            raise DeadlineExceededError(
+                "PGE deadline exceeded during publish",
+                branch=branch_name,
+            )
         return branch_name
 
     def _publish_locked(self, branch: str) -> str:
         self._ensure_repo()
+        self._reject_executable_filters()
+        seed = self._read_seed()
+        current = scan_tree(self.path)
+        added, modified, deleted = tree_delta(seed, current)
+        assert_delta_is_publishable(self.path, current, added, modified, deleted)
         worktree = Path(tempfile.mkdtemp(prefix="agentforge_publish_"))
         try:
             _git(self.codebase_path, "worktree", "add", "-B", branch, str(worktree), "HEAD")
-            _sync_tree(self.path, worktree)
-            _git(worktree, "add", "-A")
+            self.residual_branch = branch
+            head_symlinks = _head_symlink_paths(self.codebase_path)
+            for relative in [*added, *modified, *deleted]:
+                assert_destination_is_safe(worktree, head_symlinks, relative)
+            for relative in [*added, *modified]:
+                meta = current[relative]
+                if meta["kind"] == "symlink":
+                    raise PublishRejectedError(
+                        f"Refusing to publish {relative}: symlink changes are not copied onto HEAD."
+                    )
+                write_regular_file(worktree, relative, (self.path / relative).read_bytes())
+            if added or modified:
+                _git(worktree, "add", "--", *added, *modified)
+            for relative in deleted:
+                _git(worktree, "rm", "--ignore-unmatch", "--", relative)
             status = _git(worktree, "status", "--porcelain", check=False)
             if status.stdout.strip():
                 _git(worktree, "commit", "-m", f"agentforge: apply task {self.task_id}")
+            self.residual_branch = branch
             logger.info("Published sprint workspace to branch %s", branch)
             return branch
         finally:
@@ -133,17 +177,57 @@ class SprintWorkspace:
         if not (self.codebase_path / ".git").exists():
             _git(self.codebase_path, "init")
         if _git(self.codebase_path, "rev-parse", "--verify", "HEAD", check=False).returncode != 0:
-            _git(self.codebase_path, "add", "-A")
+            for relative, meta in scan_tree(self.codebase_path).items():
+                if is_sensitive_path(relative):
+                    continue
+                if meta["kind"] == "symlink" and symlink_escapes(self.codebase_path, relative, meta["target"]):
+                    continue
+                _git(self.codebase_path, "add", "--", relative)
             _git(self.codebase_path, "commit", "--allow-empty", "-m", "agentforge baseline")
+
+    def _reject_executable_filters(self) -> None:
+        """hooksPath does not stop clean/smudge filters. Refuse them before checkout."""
+        configured = _git(self.codebase_path, "config", "--local", "--get-regexp", "^filter\\.", check=False)
+        if configured.returncode == 0 and configured.stdout.strip():
+            raise PublishRejectedError(
+                "Refusing to publish: this repository configures a git clean/smudge filter. "
+                "core.hooksPath does not disable filters, so checkout and git add would run "
+                "repository commands on the host. Remove filter.* from .git/config and filter= "
+                "attributes, then retry. Nothing was committed."
+            )
+        for attributes in self.codebase_path.rglob(".gitattributes"):
+            if ".git" in attributes.parts:
+                continue
+            text = attributes.read_text(encoding="utf-8", errors="replace")
+            if re.search(r"(^|\s)filter=", text):
+                raise PublishRejectedError(
+                    "Refusing to publish: .gitattributes requests a git filter. "
+                    "Publish does not run clean or smudge commands. Nothing was committed."
+                )
+
+    @property
+    def _seed_path(self) -> Path:
+        return Path(str(self.path) + ".seed.json")
+
+    def _write_seed(self, manifest: dict[str, dict[str, str]]) -> None:
+        self._seed_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    def _read_seed(self) -> dict[str, dict[str, str]]:
+        if not self._seed_path.is_file():
+            raise PublishRejectedError(
+                "Sprint seed manifest is missing. Refusing to guess which files the task changed."
+            )
+        loaded = json.loads(self._seed_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            raise PublishRejectedError("Sprint seed manifest is unreadable.")
+        return loaded
 
     def discard(self) -> None:
         """FAIL 或合并完成后：丢弃临时目录。"""
         if self.path.exists():
             shutil.rmtree(self.path, ignore_errors=True)
             logger.info("Sprint workspace discarded: %s", self.path)
-
-
-_SKIP_NAMES = frozenset({".git", "__pycache__", ".pytest_cache", "node_modules", ".venv", "venv"})
+        self._seed_path.unlink(missing_ok=True)
 
 
 def published_branch_name(task_id: str) -> str:
@@ -185,26 +269,26 @@ def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
     )
 
 
-def _sync_tree(source: Path, destination: Path) -> None:
-    """Make destination match source, without touching destination/.git."""
-    kept: set[str] = set()
-    for dirpath, dirnames, filenames in os.walk(source):
-        dirnames[:] = [name for name in dirnames if name not in _SKIP_NAMES and not name.startswith(".")]
-        for filename in filenames:
-            if filename.endswith(".pyc"):
-                continue
-            full = Path(dirpath) / filename
-            relative = full.relative_to(source).as_posix()
-            kept.add(relative)
-            target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(full, target)
-    for dirpath, dirnames, filenames in os.walk(destination):
-        dirnames[:] = [name for name in dirnames if name not in _SKIP_NAMES]
-        for filename in filenames:
-            if filename == ".git":
-                continue
-            full = Path(dirpath) / filename
-            relative = full.relative_to(destination).as_posix()
-            if relative not in kept:
-                full.unlink(missing_ok=True)
+def _head_symlink_paths(repo: Path) -> set[str]:
+    listed = _git(repo, "ls-tree", "-r", "HEAD", check=False)
+    if listed.returncode != 0:
+        return set()
+    paths: set[str] = set()
+    for line in listed.stdout.splitlines():
+        meta, _, path = line.partition("\t")
+        mode = meta.split(" ", 1)[0]
+        if mode == "120000" and path:
+            paths.add(path)
+    return paths
+
+
+def _remove_published_path(worktree: Path, relative: str) -> None:
+    current = worktree
+    for part in Path(relative).parts:
+        current = current / part
+        if current.is_symlink():
+            raise PublishRejectedError(f"Refusing to delete through symlink {relative}")
+        if not current.exists():
+            return
+    if current.is_file():
+        current.unlink()

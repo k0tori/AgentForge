@@ -16,7 +16,10 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
     && pip install --no-cache-dir .
 
 ENV TOY_REPO_PATH=/app/toy-repo \
+    TASK_DB_PATH=/var/lib/agentforge/tasks.sqlite \
     PYTHONUNBUFFERED=1
+
+RUN mkdir -p /var/lib/agentforge
 
 EXPOSE 8000
 

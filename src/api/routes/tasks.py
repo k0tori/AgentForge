@@ -13,6 +13,9 @@ from sse_starlette.sse import EventSourceResponse
 from src.api.schemas.task import TaskCreateRequest, TaskCreateResponse, TaskStatusResponse
 from src.api.task_manager import IdempotencyConflictError, TaskEvent, TaskStatus, WorkerBusyError, task_manager
 from src.config import settings
+from src.harness.deadline import DeadlineExceededError
+from src.harness.publish_guard import PublishRejectedError
+from src.llm.errors import MESSAGES
 from src.llm.redact import sanitize
 from src.workflow.deterministic import run_deterministic_change
 from src.workflow.failures import classify_exception, outcome_failed
@@ -213,6 +216,36 @@ async def _execute_task(
             return
         task_manager.set_result(task_id, public)
 
+    except DeadlineExceededError as exc:
+        branch = exc.branch or ""
+        message = MESSAGES["execution_timeout"]
+        if branch:
+            message += f" Branch {branch} was left for inspection and is not an accepted result."
+        task_manager.set_error(task_id, message, code="execution_timeout", result={
+            "final_verdict": "FAIL",
+            "error_code": "execution_timeout",
+            "acceptance": "failed",
+            "executor": selected,
+            "demo_completed": False,
+            "result_branch": branch,
+            "residual_branch": branch,
+            "note": message,
+        })
+    except PublishRejectedError as exc:
+        branch = exc.branch or ""
+        message = str(exc)
+        if branch:
+            message += f" Branch {branch} was left for inspection and is not an accepted result."
+        task_manager.set_error(task_id, message, code=exc.code, result={
+            "final_verdict": "FAIL",
+            "error_code": exc.code,
+            "acceptance": "failed",
+            "executor": selected,
+            "demo_completed": False,
+            "result_branch": branch,
+            "residual_branch": branch,
+            "note": message,
+        })
     except Exception as exc:
         if selected == "deterministic" and isinstance(exc, ValueError):
             code, message = "demo_rejected", sanitize(str(exc))

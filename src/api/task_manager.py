@@ -66,6 +66,17 @@ class TaskState(BaseModel):
     request_hash: str | None = None
 
 
+_TERMINAL = frozenset({
+    TaskStatus.COMPLETED,
+    TaskStatus.FAILED,
+    TaskStatus.INTERRUPTED,
+})
+
+
+def _is_terminal(status: TaskStatus) -> bool:
+    return status in _TERMINAL
+
+
 class TaskManager:
     """Manages task execution and state with TTL-based cleanup."""
 
@@ -267,7 +278,7 @@ class TaskManager:
         """
         self._require_owner()
         task = self._tasks.get(task_id)
-        if task is None or task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.INTERRUPTED):
+        if task is None or _is_terminal(task.status):
             return
         payload = dict(task.result or {})
         payload["result_branch"] = branch
@@ -279,25 +290,26 @@ class TaskManager:
     def update_status(self, task_id: uuid.UUID, status: TaskStatus) -> None:
         """Update task status."""
         self._require_owner()
-        if task_id in self._tasks:
-            self._tasks[task_id].status = status
-            if status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.INTERRUPTED):
-                self._tasks[task_id].completed_at = datetime.now(UTC)
-            self._persist(self._tasks[task_id])
+        task = self._tasks.get(task_id)
+        if task is None or _is_terminal(task.status):
+            return
+        task.status = status
+        if _is_terminal(status):
+            task.completed_at = datetime.now(UTC)
+        self._persist(task)
 
     def set_result(self, task_id: uuid.UUID, result: dict[str, Any]) -> None:
         """Set task result. An interrupted task stays interrupted."""
         self._require_owner()
-        if task_id not in self._tasks:
-            return
-        if self._tasks[task_id].status in (TaskStatus.INTERRUPTED, TaskStatus.FAILED):
+        task = self._tasks.get(task_id)
+        if task is None or _is_terminal(task.status):
             return
         from src.llm.redact import sanitize_payload
 
-        self._tasks[task_id].result = sanitize_payload(result)
-        self._tasks[task_id].status = TaskStatus.COMPLETED
-        self._tasks[task_id].completed_at = datetime.now(UTC)
-        self._persist(self._tasks[task_id])
+        task.result = sanitize_payload(result)
+        task.status = TaskStatus.COMPLETED
+        task.completed_at = datetime.now(UTC)
+        self._persist(task)
 
     def set_error(
         self,
@@ -312,7 +324,7 @@ class TaskManager:
 
         self._require_owner()
         task = self._tasks.get(task_id)
-        if task is None or task.status == TaskStatus.INTERRUPTED:
+        if task is None or _is_terminal(task.status):
             return
         task.error = sanitize(error)
         task.error_code = code
