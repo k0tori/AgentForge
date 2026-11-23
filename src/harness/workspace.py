@@ -45,7 +45,18 @@ def git_subprocess_env() -> dict[str, str]:
     env["GIT_CONFIG_NOSYSTEM"] = "1"
     env["GIT_CONFIG_GLOBAL"] = "/dev/null"
     env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_AUTHOR_NAME"] = "AgentForge"
+    env["GIT_AUTHOR_EMAIL"] = "agentforge@local"
+    env["GIT_COMMITTER_NAME"] = "AgentForge"
+    env["GIT_COMMITTER_EMAIL"] = "agentforge@local"
     return env
+
+
+def _empty_hooks_dir() -> str:
+    """A real directory with no hook scripts. /dev/null is not a directory on newer git."""
+    path = Path(tempfile.gettempdir()) / "agentforge-empty-hooks"
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
 @contextmanager
@@ -255,18 +266,24 @@ def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
         "git",
         "-c", "user.email=agentforge@local",
         "-c", "user.name=AgentForge",
-        "-c", "core.hooksPath=/dev/null",
+        "-c", f"core.hooksPath={_empty_hooks_dir()}",
+        "-c", "commit.gpgsign=false",
+        "-c", "tag.gpgsign=false",
         "-c", "init.defaultBranch=main",
         *args,
     ]
-    return subprocess.run(
+    completed = subprocess.run(
         command,
         cwd=cwd,
-        check=check,
+        check=False,
         capture_output=True,
         text=True,
         env=git_subprocess_env(),
     )
+    if check and completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "git failed").strip()
+        raise PublishRejectedError(f"git {' '.join(args)} failed: {detail[:300]}")
+    return completed
 
 
 def _head_symlink_paths(repo: Path) -> set[str]:

@@ -247,6 +247,7 @@ async def _execute_task(
             "note": message,
         })
     except Exception as exc:
+        logger.error("Task %s failed: %s: %s", task_id, type(exc).__name__, sanitize(str(exc)))
         if selected == "deterministic" and isinstance(exc, ValueError):
             code, message = "demo_rejected", sanitize(str(exc))
         else:
