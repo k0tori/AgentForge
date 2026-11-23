@@ -212,6 +212,12 @@ docker-compose up -d
 - **PostgreSQL**（pgvector 扩展）— 端口 5432
 - **Redis** — 端口 6379
 
+这不会构建沙箱镜像。镜像在 profile `sandbox` 里，见 `docs/sandbox.md`：
+
+```bash
+docker compose --profile sandbox build sandbox
+```
+
 ### 运行测试
 
 ```bash

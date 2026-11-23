@@ -10,6 +10,8 @@ docker build -f Dockerfile.sandbox -t agentforge-sandbox:latest .
 
 `docker compose --profile sandbox build sandbox` 做同一件事。
 
+`docker compose up` 不会构建这个镜像。`sandbox` 在 profile `sandbox` 里，也不是 `api` 的 `depends_on`。只执行 `up` 时，默认 PGE 会在跑测试前因为本地没有 `agentforge-sandbox:latest` 而失败，并且不会改到宿主上执行，也不会自动 `docker pull`。
+
 ## 模式
 
 | `SANDBOX_MODE` | 行为 |

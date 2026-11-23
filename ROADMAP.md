@@ -43,9 +43,23 @@
 - `SANDBOX_MODE=docker pytest tests/sandbox -m sandbox` 在 CI 的 sandbox job 里跑
 - 沙箱默认仍是 docker，不可用时不退回宿主执行
 
-## 状态
+## M1 已验收
 
-M1 仍在 PR 2 上加固，还没有当作验收通过。
+验收范围只有三件事：单写进程、SQLite 持久任务记录、确定性演示闭环。
+
+这不包括真实 PGE 模型质量，也不包括多 worker 执行。
+
+- head：`1c82cdd8b8b484e826019a85e7eede77d46fff83`
+- CI：push [45155636618](https://github.com/k0tori/AgentForge/actions/runs/45155636618) 与 pull_request [45155642750](https://github.com/k0tori/AgentForge/actions/runs/45155642750)，test 与 sandbox 都成功
+- 双进程证据：`tests/integration/test_task_processes.py`（活进程不被回收、退出后才 interrupted、publish 跨进程锁）
+
+## M2
+
+默认 PGE 路径遇到缺密钥、Docker 不可用、镜像不在本地、模型超时或失败时，任务在有限时间内变成 `failed`，`final_verdict` 不是 PASS，错误可在重启后查询。检索依赖不可用时任务可以继续，结果里带 `retrieval_unavailable`。
+
+故障注入在 `tests/unit/test_failure_reporting.py` 和 `tests/integration/test_pge_failures.py`。它们不调用付费模型，也不代替 `tests/sandbox` 的真实容器证据。
+
+M2 还没有验收。
 
 ## 已知风险
 
@@ -54,4 +68,4 @@ M1 仍在 PR 2 上加固，还没有当作验收通过。
 - 发布用跨进程文件锁。锁在临时目录，按仓库路径分开。
 - 进程在 `git commit` 之后、结果写成 completed 之前退出时，任务是 `interrupted`。分支名会出现在错误说明里，不能当成成功。
 - `docker-compose.yml` 的 API 服务仍然挂载 Docker socket。沙箱容器不挂 socket、不带宿主环境、无网络。
-- 没有配置 `DEEPSEEK_API_KEY`。真实模型 smoke 未跑，也不向用户要密钥。
+- 没有配置 `DEEPSEEK_API_KEY`。真实模型 smoke 未跑。缺密钥时任务失败，不向用户要密钥，也不发起模型请求。
