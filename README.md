@@ -239,10 +239,11 @@ API 文档：http://localhost:8000/docs
 ### 提交任务
 
 ```bash
-# 创建任务（异步执行 PGE 循环）
+# 创建任务（异步执行 PGE 循环）。字段名是 intent。
+# 不调用模型的闭环见 docs/task-loop.md
 curl -X POST http://localhost:8000/api/v1/tasks/ \
   -H "Content-Type: application/json" \
-  -d '{"request": "参照 Note 资源，新增 Tag 资源并建立多对多关联"}'
+  -d '{"intent": "参照 Note 资源，新增 Tag 资源并建立多对多关联"}'
 
 # 查询任务状态
 curl http://localhost:8000/api/v1/tasks/{task_id}
