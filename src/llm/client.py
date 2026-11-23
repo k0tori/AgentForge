@@ -8,6 +8,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_openai import ChatOpenAI
 
 from src.config import settings
+from src.llm.errors import MESSAGES, ModelCallError
+from src.llm.redact import sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +36,12 @@ class LLMClient:
     def __post_init__(self) -> None:
         self._model = ChatOpenAI(
             model=settings.DEEPSEEK_MODEL,
-            api_key=settings.DEEPSEEK_API_KEY,
+            api_key=settings.DEEPSEEK_API_KEY or "missing",
             base_url=settings.DEEPSEEK_BASE_URL,
             temperature=settings.TEMPERATURE,
             max_tokens=4096,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+            max_retries=0,
         )
 
     async def _retry_with_backoff(self, func, *args, **kwargs):
@@ -52,13 +56,17 @@ class LLMClient:
                     delay = min(self._base_delay * (2 ** attempt), self._max_delay)
                     logger.warning(
                         "LLM call failed (attempt %d/%d), retrying in %.1fs: %s",
-                        attempt + 1, self._max_retries, delay, e,
+                        attempt + 1,
+                        self._max_retries,
+                        delay,
+                        sanitize(str(e)),
                     )
                     await asyncio.sleep(delay)
                 else:
                     logger.error(
                         "LLM call failed after %d attempts: %s",
-                        self._max_retries, e,
+                        self._max_retries,
+                        sanitize(str(e)),
                     )
         raise last_exception
 
@@ -69,15 +77,25 @@ class LLMClient:
         tool_choice: str | None = None,
     ) -> AIMessage:
         """Send messages to the LLM and return the response with retry."""
+        if not settings.DEEPSEEK_API_KEY.strip():
+            raise ModelCallError("missing_model_config", MESSAGES["missing_model_config"])
         kwargs: dict = {}
         if tools:
             kwargs["tools"] = tools
         if tool_choice:
             kwargs["tool_choice"] = tool_choice
 
-        response: AIMessage = await self._retry_with_backoff(
-            self._model.ainvoke, messages, **kwargs
-        )
+        try:
+            response: AIMessage = await asyncio.wait_for(
+                self._retry_with_backoff(self._model.ainvoke, messages, **kwargs),
+                timeout=settings.LLM_TIMEOUT_SECONDS * self._max_retries,
+            )
+        except TimeoutError:
+            raise ModelCallError("model_timeout", MESSAGES["model_timeout"]) from None
+        except ModelCallError:
+            raise
+        except Exception:
+            raise ModelCallError("model_failed", MESSAGES["model_failed"]) from None
 
         # Track token usage
         if hasattr(response, "usage_metadata") and response.usage_metadata:

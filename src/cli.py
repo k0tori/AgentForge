@@ -19,14 +19,36 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    from src.llm.redact import sanitize, sanitize_delivery
+    from src.logging_config import setup_logging
+    from src.workflow.failures import classify_exception, outcome_failed
+
+    setup_logging()
+
     args = build_parser().parse_args(argv)
-    state = asyncio.run(run_task(args.request, args.codebase, args.task_id))
+    try:
+        state = asyncio.run(run_task(args.request, args.codebase, args.task_id))
+    except Exception as exc:
+        code, message = classify_exception(exc)
+        state = {"task_id": args.task_id, "error_code": code, "error": message, "final_verdict": "FAIL"}
+    failed = outcome_failed(state)
     summary = {
         "task_id": state.get("task_id"),
+        "status": "failed" if failed else "completed",
         "final_verdict": state.get("final_verdict"),
-        "error": state.get("error"),
+        "error_code": state.get("error_code"),
+        "error": sanitize(str(state.get("error"))) if state.get("error") else None,
+        "degradations": [
+            {
+                "code": item.get("code"),
+                "message": sanitize_delivery(str(item.get("message", ""))),
+            }
+            for item in (state.get("degradations") or [])
+            if isinstance(item, dict)
+        ],
         "result_branch": state.get("result_branch"),
-        "trace": state.get("trace"),
+        "code_diff": sanitize_delivery(str(state.get("code_diff") or "")),
     }
-    sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, default=str) + "\n")
-    raise SystemExit(1 if state.get("error") else 0)
+    rendered = json.dumps(summary, ensure_ascii=False, indent=2)
+    sys.stdout.write(rendered + "\n")
+    raise SystemExit(1 if failed else 0)

@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # Application
     LOG_LEVEL: str = "INFO"
     TOY_REPO_PATH: str = "./toy-repo"
+    TASK_DB_PATH: str = ".agentforge/tasks.sqlite"
+    # Demo writer. Off unless a developer opts in. It is not the PGE path.
+    DETERMINISTIC_EXECUTOR: bool = False
 
     # Embedding
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
@@ -35,6 +38,8 @@ class Settings(BaseSettings):
     MAX_ITERATIONS: int = 10
     TOKEN_BUDGET: int = 150_000
     TIMEOUT_SECONDS: int = 300
+    LLM_TIMEOUT_SECONDS: float = 30
+    RETRIEVAL_TIMEOUT_SECONDS: float = 20
 
     # API Security (empty means no auth required in dev)
     API_KEY: str = ""

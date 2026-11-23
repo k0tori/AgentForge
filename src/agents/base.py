@@ -5,7 +5,11 @@ from abc import ABC, abstractmethod
 
 from langchain_core.messages import AIMessage, BaseMessage
 
+from src.harness.deadline import DeadlineExceededError
+from src.harness.sandbox.errors import SandboxUnavailableError
 from src.llm.client import LLMClient
+from src.llm.errors import MESSAGES, ModelCallError
+from src.llm.redact import sanitize
 from src.workflow.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -30,12 +34,21 @@ class BaseAgent(ABC):
         """Execute with error handling. Wraps execute() with try-catch."""
         try:
             return await self.execute(state)
-        except Exception as e:
-            logger.error("Agent %s failed: %s", self.__class__.__name__, e, exc_info=True)
-            return {
-                **state,
-                "error": f"{self.__class__.__name__} failed: {e}",
-            }
+        except ModelCallError as exc:
+            logger.error("Agent %s failed with %s", self.__class__.__name__, exc.code)
+            return {**state, "error": str(exc), "error_code": exc.code}
+        except SandboxUnavailableError as exc:
+            logger.error("Agent %s failed with %s", self.__class__.__name__, exc.code)
+            return {**state, "error": str(exc), "error_code": exc.code}
+        except DeadlineExceededError:
+            logger.error("Agent %s stopped at the PGE deadline", self.__class__.__name__)
+            return {**state, "error": MESSAGES["execution_timeout"], "error_code": "execution_timeout"}
+        except TimeoutError:
+            logger.error("Agent %s timed out", self.__class__.__name__)
+            return {**state, "error": MESSAGES["model_timeout"], "error_code": "model_timeout"}
+        except Exception as exc:
+            logger.error("Agent %s failed: %s", self.__class__.__name__, sanitize(str(exc)))
+            return {**state, "error": MESSAGES["task_failed"], "error_code": "task_failed"}
 
     def _build_messages(self, system_prompt: str, user_content: str) -> list[BaseMessage]:
         """Build a message list from system prompt and user content."""

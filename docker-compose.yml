@@ -51,10 +51,13 @@ services:
       TOY_REPO_PATH: /app/toy-repo
       SANDBOX_MODE: docker
       SANDBOX_IMAGE: agentforge-sandbox:latest
+      TASK_DB_PATH: /var/lib/agentforge/tasks.sqlite
     volumes:
       # The API process needs the socket to start sandboxes. Sandbox containers
       # are not given this mount; see docs/sandbox.md.
       - /var/run/docker.sock:/var/run/docker.sock
+      # Task rows survive image rebuilds. The path matches TASK_DB_PATH.
+      - agentforge-tasks:/var/lib/agentforge
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,3 +67,4 @@ services:
 
 volumes:
   pgdata:
+  agentforge-tasks:

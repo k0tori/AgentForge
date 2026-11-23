@@ -23,6 +23,8 @@ jobs:
         run: ruff check src toy-repo/src tests
       - name: Test AgentForge
         run: pytest -m "not integration"
+      - name: M1 task lifecycle
+        run: pytest tests/integration/test_task_lifecycle.py tests/integration/test_task_processes.py tests/integration/test_pge_failures.py tests/unit/test_failure_reporting.py
       - name: Test toy-repo
         working-directory: toy-repo
         run: pytest

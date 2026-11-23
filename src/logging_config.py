@@ -9,6 +9,14 @@ import logging
 import sys
 
 from src.config import settings
+from src.llm.redact import sanitize
+
+
+class RedactFormatter(logging.Formatter):
+    """Format a record, then strip credentials from the rendered line."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return sanitize(super().format(record))
 
 
 def setup_logging() -> None:
@@ -31,7 +39,7 @@ def setup_logging() -> None:
     console_handler.setLevel(logging.DEBUG)
 
     # Create formatter
-    formatter = logging.Formatter(
+    formatter = RedactFormatter(
         fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )

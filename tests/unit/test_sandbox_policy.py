@@ -30,6 +30,7 @@ def test_run_command_has_no_socket_or_host_secrets(monkeypatch, tmp_path: Path):
     assert "also-secret" not in rendered
     assert "DEEPSEEK_API_KEY" not in command
     assert command[command.index("--network") + 1] == "none"
+    assert command[command.index("--pull") + 1] == "never"
     assert "ALL" in command
     assert "--privileged" not in command
     assert command[command.index("-v") + 1].endswith(":/workspace:rw")

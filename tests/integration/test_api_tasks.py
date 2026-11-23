@@ -20,11 +20,9 @@ def client():
 @pytest.fixture(autouse=True)
 def clear_task_manager():
     """Clear task manager between tests."""
-    task_manager._tasks.clear()
-    task_manager._event_queues.clear()
+    task_manager.use_memory()
     yield
-    task_manager._tasks.clear()
-    task_manager._event_queues.clear()
+    task_manager.use_memory()
 
 
 class TestCreateTask:

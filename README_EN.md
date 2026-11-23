@@ -234,10 +234,11 @@ API docs: http://localhost:8000/docs
 ### Submit a Task
 
 ```bash
-# Create task (async PGE execution)
+# Create task (async PGE execution). The field name is intent.
+# A no-model loop that still writes a branch is documented in docs/task-loop.md.
 curl -X POST http://localhost:8000/api/v1/tasks/ \
   -H "Content-Type: application/json" \
-  -d '{"request": "Add a Tag resource with Note-Tag many-to-many association"}'
+  -d '{"intent": "Add a Tag resource with Note-Tag many-to-many association"}'
 
 # Check task status
 curl http://localhost:8000/api/v1/tasks/{task_id}

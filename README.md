@@ -205,12 +205,18 @@ REDIS_URL=redis://localhost:6379
 ### 启动基础设施
 
 ```bash
-docker-compose up -d
+docker compose up -d postgres redis
 ```
 
 这会启动：
 - **PostgreSQL**（pgvector 扩展）— 端口 5432
 - **Redis** — 端口 6379
+
+不带服务名的 `docker compose up` 还会启动 `api`，因为 `api` 没有 profile。两种写法都不会构建沙箱镜像：`sandbox` 在 profile `sandbox` 里，也不是 `api` 的依赖。`api` 把任务库放在卷 `agentforge-tasks` 的 `/var/lib/agentforge/tasks.sqlite`，重建容器不会丢掉任务记录。构建沙箱镜像见 `docs/sandbox.md`：
+
+```bash
+docker compose --profile sandbox build sandbox
+```
 
 ### 运行测试
 
@@ -239,10 +245,11 @@ API 文档：http://localhost:8000/docs
 ### 提交任务
 
 ```bash
-# 创建任务（异步执行 PGE 循环）
+# 创建任务（异步执行 PGE 循环）。字段名是 intent。
+# 不调用模型的演示见 docs/task-loop.md。它默认关闭，结果不是 PGE 的 PASS。
 curl -X POST http://localhost:8000/api/v1/tasks/ \
   -H "Content-Type: application/json" \
-  -d '{"request": "参照 Note 资源，新增 Tag 资源并建立多对多关联"}'
+  -d '{"intent": "参照 Note 资源，新增 Tag 资源并建立多对多关联"}'
 
 # 查询任务状态
 curl http://localhost:8000/api/v1/tasks/{task_id}

@@ -10,6 +10,8 @@ docker build -f Dockerfile.sandbox -t agentforge-sandbox:latest .
 
 `docker compose --profile sandbox build sandbox` 做同一件事。
 
+`docker compose up` 不会构建这个镜像。`sandbox` 在 profile `sandbox` 里，也不是 `api` 的 `depends_on`。只执行 `up` 时，默认 PGE 会在跑测试前因为本地没有 `agentforge-sandbox:latest` 而失败，并且不会改到宿主上执行，也不会自动 `docker pull`。
+
 ## 模式
 
 | `SANDBOX_MODE` | 行为 |
@@ -25,7 +27,9 @@ docker build -f Dockerfile.sandbox -t agentforge-sandbox:latest .
 - 不继承宿主环境变量（没有 API key）
 - 网络是 `none`
 - 丢掉全部 Linux capabilities，并设置 `no-new-privileges`
-- 内存、CPU、进程数有上限；超时后容器被删除
+- 内存、CPU、进程数有上限；命令超时或 PGE 截止时间到达后，这次启动的容器会被 `docker rm -f` 删除
+
+PGE 截止时间会取消正在等待的协程，并在下一次检查时停止新的 git 命令和发布。已经进入 `subprocess` 的那一条 git 命令不会被杀掉；它返回之后，结果不会被记成 PASS，后续的 `set_result` 也不能把 `failed` 改回 `completed`。超时不等于把所有线程都停掉。
 
 文件读写仍由宿主上的工具完成，但只写 sprint 工作区。真正执行测试和 lint 的是容器里的 Python。
 

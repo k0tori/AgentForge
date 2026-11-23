@@ -6,7 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from src.harness.workspace import SprintWorkspace
+from src.harness.workspace import SprintWorkspace, git_subprocess_env
 
 
 def test_create_seeds_codebase(tmp_path: Path) -> None:
@@ -70,11 +70,25 @@ def test_merge_copies_back_to_codebase(tmp_path: Path) -> None:
     assert not os.path.isdir(workspace_path)
 
 
+def test_git_env_drops_api_keys(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-value")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = git_subprocess_env()
+    assert "DEEPSEEK_API_KEY" not in env
+    assert "secret-value" not in env.values()
+    assert env["PATH"] == "/usr/bin"
+    assert env["GIT_CONFIG_GLOBAL"] == "/dev/null"
+
+
 def test_publish_commits_a_branch_and_leaves_the_worktree(tmp_path: Path) -> None:
     """publish() records the workspace on a branch and does not overwrite the checkout."""
     codebase = tmp_path / "codebase"
     codebase.mkdir()
     (codebase / "existing.py").write_text("x = 1")
+    subprocess.run(["git", "init", "-b", "main"], cwd=codebase, check=True, capture_output=True)
+    git = ["git", "-c", "user.email=test@local", "-c", "user.name=test", "-c", "commit.gpgsign=false"]
+    subprocess.run([*git, "add", "-A"], cwd=codebase, check=True, capture_output=True)
+    subprocess.run([*git, "commit", "-m", "base"], cwd=codebase, check=True, capture_output=True)
 
     ws = SprintWorkspace(str(codebase), "task 42", 1)
     workspace_path = ws.create()

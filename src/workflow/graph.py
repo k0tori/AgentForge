@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -26,7 +27,6 @@ from src.harness.safety.rule_of_two import enforce_tool_set
 from src.harness.workspace import SprintWorkspace
 from src.llm.client import LLMClient
 from src.retrieval.context import project_path_var
-from src.retrieval.indexer import index_all
 from src.tools.registry import registry
 from src.workflow.edges import handle_escalation, handle_next_sprint, route_after_evaluate
 from src.workflow.state import AgentState
@@ -95,13 +95,52 @@ def publish_branch(state: AgentState) -> AgentState:
         int(state.get("current_sprint") or 1),
     )
     workspace.path = Path(sprint_workspace)
+    from src.harness.deadline import DeadlineExceededError, deadline_exceeded
+    from src.llm.errors import MESSAGES
+
+    if deadline_exceeded():
+        return {
+            **state,
+            "error": MESSAGES["execution_timeout"],
+            "error_code": "execution_timeout",
+            "final_verdict": "FAIL",
+            "result_branch": "",
+        }
     try:
         branch = workspace.publish()
-    except Exception as exc:
-        logger.exception("Failed to publish sprint workspace")
-        return {**state, "error": f"Failed to publish branch: {exc}", "final_verdict": "FAIL"}
+    except DeadlineExceededError as exc:
+        logger.error("Refusing to accept a branch after the PGE deadline")
+        branch = exc.branch or ""
+        message = MESSAGES["execution_timeout"]
+        if branch:
+            message += f" Branch {branch} was left for inspection and is not an accepted result."
+        return {
+            **state,
+            "error": message,
+            "error_code": "execution_timeout",
+            "final_verdict": "FAIL",
+            "result_branch": branch,
+            "residual_branch": branch,
+        }
+    except Exception:
+        logger.error("Failed to publish sprint workspace")
+        return {**state, "error": "Failed to publish branch", "final_verdict": "FAIL"}
     finally:
         workspace.discard()
+    if deadline_exceeded():
+        logger.error("Publish finished after the PGE deadline and was not accepted")
+        message = (
+            f"{MESSAGES['execution_timeout']} Branch {branch} was left for inspection "
+            "and is not an accepted result."
+        )
+        return {
+            **state,
+            "error": message,
+            "error_code": "execution_timeout",
+            "final_verdict": "FAIL",
+            "result_branch": branch,
+            "residual_branch": branch,
+        }
     logger.info("Published passing run to %s", branch)
     return {**state, "result_branch": branch, "error": None}
 
@@ -177,21 +216,33 @@ def get_compiled_graph():
 async def run_task(request: str, codebase_path: str, task_id: str = "") -> AgentState:
     """Run a complete PGE task.
 
-    This is the main entry point for task execution.
+    Required configuration and the sandbox are checked before any model call.
+    Retrieval failure is recorded and does not by itself fail the task.
     """
     import uuid
+
+    from src.config import settings
+    from src.harness.deadline import bind_deadline, deadline_exceeded, reset_deadline
+    from src.workflow.failures import TaskFailureError, failed_state
+    from src.workflow.preflight import assess_retrieval, require_pge_ready
 
     if not task_id:
         task_id = str(uuid.uuid4())
 
     logger.info("Starting task %s", task_id)
+    try:
+        require_pge_ready()
+    except TaskFailureError as exc:
+        logger.error("Task %s failed with %s", task_id, exc.code)
+        return failed_state(task_id=task_id, codebase_path=codebase_path, code=exc.code, message=str(exc))
 
+    degradations = await assess_retrieval(codebase_path)
+    deadline_token = bind_deadline(settings.TIMEOUT_SECONDS)
+    project_token = project_path_var.set(os.path.abspath(codebase_path))
     cost_tracker = CostTracker()
     collector = TraceCollector()
     collector.start_trace(task_id)
     started = time.perf_counter()
-    project_token = project_path_var.set(os.path.abspath(codebase_path))
-
     initial_state: AgentState = {
         "request": request,
         "plan": [],
@@ -209,17 +260,38 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
         "final_verdict": None,
         "sensors_passed": True,
         "error": None,
+        "degradations": degradations,
         "cost_tracker": cost_tracker,
         "trace_collector": collector,
     }
-
     try:
-        await index_all(codebase_path)
         graph = get_compiled_graph()
-        final_state = await graph.ainvoke(initial_state)
+        try:
+            final_state = await asyncio.wait_for(graph.ainvoke(initial_state), timeout=settings.TIMEOUT_SECONDS)
+        except TimeoutError as exc:
+            logger.error("Task %s failed with execution_timeout", task_id)
+            return failed_state(
+                task_id=task_id,
+                codebase_path=codebase_path,
+                code="execution_timeout",
+                degradations=degradations,
+                result_branch=getattr(exc, "branch", None),
+            )
+        if deadline_exceeded() or final_state.get("error_code") == "execution_timeout":
+            logger.error("Task %s finished after the deadline and was not accepted", task_id)
+            return failed_state(
+                task_id=task_id,
+                codebase_path=codebase_path,
+                code="execution_timeout",
+                degradations=degradations,
+                result_branch=final_state.get("result_branch") or final_state.get("residual_branch"),
+            )
     finally:
         project_path_var.reset(project_token)
+        reset_deadline(deadline_token)
 
+    final_state["degradations"] = degradations
+    final_state = _settle_outcome(final_state)
     breakdown = cost_tracker.get_breakdown()
     final_state["cost_breakdown"] = breakdown
     verdict = final_state.get("final_verdict") or ""
@@ -231,12 +303,40 @@ async def run_task(request: str, codebase_path: str, task_id: str = "") -> Agent
         sprint_retries=final_state.get("retry_count") or 0,
         final_verdict=verdict or ("FAIL" if final_state.get("error") else ""),
     ))
-    final_state["trace"] = collector.to_dict()
-    final_state.pop("trace_collector", None)
-
     if final_state.get("error"):
-        logger.error("Task %s failed: %s", task_id, final_state["error"])
+        final_state["trace"] = None
+        logger.error("Task %s failed with %s", task_id, final_state.get("error_code"))
     else:
+        final_state["trace"] = collector.to_dict()
         logger.info("Task %s completed with verdict: %s", task_id, final_state.get("final_verdict"))
-
+    final_state.pop("trace_collector", None)
+    final_state.pop("request", None)
     return final_state
+
+
+def _settle_outcome(state: AgentState) -> AgentState:
+    """Keep a failure from being reported as PASS, and drop raw exception text."""
+    from src.llm.errors import MESSAGES
+
+    code = state.get("error_code")
+    error = state.get("error")
+    if error and not code:
+        from src.workflow.failures import classify_text
+
+        code, error = classify_text(str(error))
+        state["error_code"] = code
+        state["error"] = error
+    if error or code:
+        verdict = state.get("final_verdict") or ""
+        if not verdict or verdict.startswith("PASS"):
+            state["final_verdict"] = "FAIL"
+        state["acceptance"] = "failed"
+        state["note"] = state.get("error") or MESSAGES["task_failed"]
+        state["trace"] = None
+    elif state.get("final_verdict") == "FAIL":
+        state["error_code"] = "evaluation_failed"
+        state["error"] = MESSAGES["evaluation_failed"]
+        state["acceptance"] = "failed"
+        state["note"] = MESSAGES["evaluation_failed"]
+        state["trace"] = None
+    return state

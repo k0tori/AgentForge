@@ -7,7 +7,11 @@ from sqlmodel import SQLModel
 
 from src.config import settings
 
-engine = create_async_engine(settings.DATABASE_URL, echo=False)
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=False,
+    connect_args={"timeout": 3},
+)
 async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
