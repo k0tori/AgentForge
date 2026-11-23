@@ -13,7 +13,18 @@ import os
 import re
 from pathlib import Path
 
-SKIP_NAMES = frozenset({".git", "__pycache__", ".pytest_cache", "node_modules", ".venv", "venv"})
+SKIP_NAMES = frozenset({
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".cache",
+    "htmlcov",
+    "node_modules",
+    ".venv",
+    "venv",
+})
 _EXAMPLE_ENV = re.compile(r"^\.env\.(example|sample|template)$", re.IGNORECASE)
 _SENSITIVE_NAMES = frozenset({
     ".env",

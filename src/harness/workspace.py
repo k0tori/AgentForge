@@ -168,8 +168,8 @@ class SprintWorkspace:
                         f"Refusing to publish {relative}: symlink changes are not copied onto HEAD."
                     )
                 write_regular_file(worktree, relative, (self.path / relative).read_bytes())
-            if added or modified:
-                _git(worktree, "add", "--", *added, *modified)
+            for relative in [*added, *modified]:
+                _add_if_trackable(worktree, relative)
             for relative in deleted:
                 _git(worktree, "rm", "--ignore-unmatch", "--", relative)
             status = _git(worktree, "status", "--porcelain", check=False)
@@ -193,7 +193,7 @@ class SprintWorkspace:
                     continue
                 if meta["kind"] == "symlink" and symlink_escapes(self.codebase_path, relative, meta["target"]):
                     continue
-                _git(self.codebase_path, "add", "--", relative)
+                _add_if_trackable(self.codebase_path, relative)
             _git(self.codebase_path, "commit", "--allow-empty", "-m", "agentforge baseline")
 
     def _reject_executable_filters(self) -> None:
@@ -285,6 +285,14 @@ def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
         detail = (completed.stderr or completed.stdout or "git failed").strip()
         raise PublishRejectedError(f"git {' '.join(args)} failed: {detail[:300]}")
     return completed
+
+
+def _add_if_trackable(repo: Path, relative: str) -> None:
+    """Skip files git already ignores. Do not force-add them."""
+    ignored = _git(repo, "check-ignore", "-q", "--", relative, check=False)
+    if ignored.returncode == 0:
+        return
+    _git(repo, "add", "--", relative)
 
 
 def _head_symlink_paths(repo: Path) -> set[str]:
