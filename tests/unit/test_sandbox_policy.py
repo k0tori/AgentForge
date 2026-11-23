@@ -20,7 +20,7 @@ def test_run_command_has_no_socket_or_host_secrets(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "also-secret")
     command = build_docker_run(
         str(tmp_path),
-        ["python", "-m", "pytest", "-q"],
+        ["python", "-m", "pytest", "-v", "--tb=short"],
         name="agentforge-sbx-policy",
         attempt_id="generate-task-abc",
     )
@@ -34,7 +34,15 @@ def test_run_command_has_no_socket_or_host_secrets(monkeypatch, tmp_path: Path):
     assert "ALL" in command
     assert "--privileged" not in command
     assert command[command.index("-v") + 1].endswith(":/workspace:rw")
-    assert command[-4:] == ["python", "-m", "pytest", "-q"]
+    assert command[command.index("python") :] == ["python", "-m", "pytest", "-v", "--tb=short"]
+    assert "agentforge.managed=1" in command
+
+
+def test_python_c_and_shell_are_rejected(tmp_path: Path):
+    with pytest.raises(SandboxUnavailableError):
+        build_docker_run(str(tmp_path), ["python", "-c", "print(1)"], name="agentforge-sbx-policy", attempt_id="abc")
+    with pytest.raises(SandboxUnavailableError):
+        build_docker_run(str(tmp_path), ["bash", "-lc", "id"], name="agentforge-sbx-policy", attempt_id="abc")
 
 
 def test_refuses_system_mounts():

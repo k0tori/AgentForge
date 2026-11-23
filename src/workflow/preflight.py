@@ -23,8 +23,12 @@ def require_pge_ready() -> None:
         return
     if mode != "docker":
         raise TaskFailureError("sandbox_unavailable", MESSAGES["sandbox_unavailable"])
+    sandbox_runtime.last_sandbox_block_reason = ""
     if not sandbox_runtime.docker_ready():
-        raise TaskFailureError("sandbox_unavailable")
+        raise TaskFailureError(
+            "sandbox_unavailable",
+            sandbox_runtime.last_sandbox_block_reason or None,
+        )
     if not sandbox_runtime.image_present(settings.SANDBOX_IMAGE):
         raise TaskFailureError("sandbox_image_missing")
 

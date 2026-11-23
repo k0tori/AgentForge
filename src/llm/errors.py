@@ -18,7 +18,7 @@ MESSAGES = {
     "model_failed": "The model request failed. The task did not succeed.",
     "execution_timeout": "The task exceeded TIMEOUT_SECONDS and was stopped. It did not succeed.",
     "sandbox_unavailable": (
-        "Docker is not reachable. Generated code was not executed and was not run on the host."
+        "The sandbox executor is not reachable. Generated code was not executed and was not run on the host."
     ),
     "sandbox_image_missing": (
         "The sandbox image is not present locally. "

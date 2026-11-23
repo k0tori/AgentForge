@@ -9,7 +9,6 @@ RUN apt-get update \
 COPY pyproject.toml ./
 COPY src ./src
 COPY toy-repo ./toy-repo
-COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 
 # Install CPU torch before the project so sentence-transformers does not pull CUDA wheels.
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
@@ -19,7 +18,12 @@ ENV TOY_REPO_PATH=/app/toy-repo \
     TASK_DB_PATH=/var/lib/agentforge/tasks.sqlite \
     PYTHONUNBUFFERED=1
 
-RUN mkdir -p /var/lib/agentforge
+RUN groupadd --gid 10002 agentforge \
+    && useradd --uid 10002 --gid 10002 --create-home --shell /usr/sbin/nologin agentforge \
+    && mkdir -p /var/lib/agentforge \
+    && chown agentforge:agentforge /var/lib/agentforge
+
+USER agentforge
 
 EXPOSE 8000
 

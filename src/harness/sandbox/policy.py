@@ -4,7 +4,6 @@ The command is the security boundary: no shell, no host environment, no Docker s
 """
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -95,24 +94,33 @@ def _checked_attempt(attempt_id: str) -> str:
 
 
 def container_argv(argv: list[str]) -> list[str]:
-    """Translate a host command into one that runs inside the sandbox image.
+    """Allow only the pytest and ruff vectors the executor builds.
 
-    Host interpreters and absolute paths are rejected. Callers pass `python`
-    and workspace-relative arguments.
+    `python -c`, a shell, and absolute host paths are rejected.
     """
-    if not argv or argv[0] != "python":
-        raise SandboxUnavailableError("Sandbox commands must start with the image python")
-    for arg in argv:
-        if "docker.sock" in arg or arg.startswith("/var/run"):
-            raise SandboxUnavailableError(f"Refusing sandbox argument: {arg}")
+    pytest_prefix = ["python", "-m", "pytest", "-v", "--tb=short"]
+    ruff_argv = ["python", "-m", "ruff", "check", "--output-format=concise", "."]
+    if argv == ruff_argv:
+        return list(argv)
+    if argv[: len(pytest_prefix)] != pytest_prefix or len(argv) > len(pytest_prefix) + 1:
+        raise SandboxUnavailableError("Sandbox commands must be pytest or ruff")
+    if len(argv) == len(pytest_prefix) + 1:
+        target = argv[-1]
+        if (
+            not target
+            or target.startswith(("-", "/", "."))
+            or ".." in target.split("/")
+            or "docker.sock" in target
+        ):
+            raise SandboxUnavailableError("Refusing sandbox argument")
     return list(argv)
 
 
 def build_docker_run(workspace: str, argv: list[str], *, name: str, attempt_id: str) -> list[str]:
     """Return the argv of a one-shot container. The list is not passed through a shell."""
     mount = assert_workspace_mountable(workspace)
-    uid = os.getuid()
-    gid = os.getgid()
+    uid = settings.SANDBOX_RUN_UID
+    gid = settings.SANDBOX_RUN_GID
     command = [
         "docker",
         "run",
@@ -142,6 +150,8 @@ def build_docker_run(workspace: str, argv: list[str], *, name: str, attempt_id: 
         f"{uid}:{gid}",
         "--label",
         "agentforge.sandbox=1",
+        "--label",
+        "agentforge.managed=1",
         "--label",
         f"agentforge.attempt={_checked_attempt(attempt_id)}",
         "-v",

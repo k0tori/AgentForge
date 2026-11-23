@@ -16,7 +16,6 @@
 - 多角色编排、RAGAS、回放、校准套件
 - Web UI
 - 用真实大模型分数证明生成质量
-- 把 Docker socket 从 API 进程里拿掉（已知风险，单独处理）
 
 ## Backlog
 
@@ -31,7 +30,7 @@
 
 - [ ] 真实模型 smoke 只在已有凭据时跑，并单独报告，不与确定性闭环混为一谈
 - [ ] 沙箱镜像随 API 一起发布，减少“忘了 build sandbox”的失败
-- [ ] API 进程不再直接持有 Docker socket
+- [ ] API 进程不再直接持有 Docker socket（本分支已实现执行端，待验收）
 
 ## 本轮（M1）完成标准
 
@@ -69,5 +68,5 @@ M2 还没有验收。
 - 确定性路径是演示。`completed` 只表示分支写完，不表示 PGE 验收通过。
 - 发布用跨进程文件锁。锁在临时目录，按仓库路径分开。
 - 进程在 `git commit` 之后、结果写成 completed 之前退出时，任务是 `interrupted`。分支名会出现在错误说明里，不能当成成功。
-- `docker-compose.yml` 的 API 服务仍然挂载 Docker socket。沙箱容器不挂 socket、不带宿主环境、无网络。
+- `executor` 持有 Docker socket。`api` 不挂 socket、不以 root 运行、镜像里没有 docker CLI。沙箱容器不挂 socket、不带宿主环境、无网络。执行端被攻破仍然等于宿主 Docker 权限；容器逃逸不在这条边界里被证明不可能。
 - 没有配置 `DEEPSEEK_API_KEY`。真实模型 smoke 未跑。缺密钥时任务失败，不向用户要密钥，也不发起模型请求。

@@ -1,0 +1,21 @@
+# Holds the Docker socket and exposes only the pytest/ruff Unix socket.
+FROM python:3.12-slim-bookworm
+
+RUN pip install --no-cache-dir pydantic-settings
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
+
+WORKDIR /app
+COPY src ./src
+
+ENV PYTHONPATH=/app \
+    SANDBOX_EXECUTOR_SOCK=/run/agentforge/executor.sock \
+    SANDBOX_WORKSPACE_ROOT=/var/lib/agentforge/workspaces \
+    SANDBOX_API_UID=10002 \
+    SANDBOX_API_GID=10002 \
+    SANDBOX_RUN_UID=10002 \
+    SANDBOX_RUN_GID=10002 \
+    SANDBOX_IMAGE=agentforge-sandbox:latest \
+    PYTHONUNBUFFERED=1
+
+USER root
+ENTRYPOINT ["python", "-m", "src.harness.sandbox.executor"]

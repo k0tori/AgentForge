@@ -41,8 +41,53 @@ services:
       dockerfile: Dockerfile.sandbox
     image: agentforge-sandbox:latest
 
+  # The only service that receives the Docker socket. It accepts pytest/ruff on a Unix socket.
+  executor:
+    build:
+      context: .
+      dockerfile: Dockerfile.executor
+    image: agentforge-executor:latest
+    user: "0:0"
+    environment:
+      SANDBOX_EXECUTOR_SOCK: /run/agentforge/executor.sock
+      SANDBOX_WORKSPACE_ROOT: /var/lib/agentforge/workspaces
+      SANDBOX_API_UID: "10002"
+      SANDBOX_API_GID: "10002"
+      SANDBOX_RUN_UID: "10002"
+      SANDBOX_RUN_GID: "10002"
+      SANDBOX_IMAGE: agentforge-sandbox:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same absolute path in the container and on the host. dockerd opens the host path.
+      - /var/lib/agentforge/workspaces:/var/lib/agentforge/workspaces
+      - executor-sock:/run/agentforge
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os,socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect(os.environ['SANDBOX_EXECUTOR_SOCK']); s.close()",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 3s
+    restart: unless-stopped
+
+  api-init:
+    build: .
+    image: agentforge-api:latest
+    user: "0:0"
+    entrypoint: ["chown", "10002:10002", "/var/lib/agentforge"]
+    volumes:
+      - agentforge-tasks:/var/lib/agentforge
+    restart: "no"
+
   api:
     build: .
+    image: agentforge-api:latest
+    user: "10002:10002"
     ports:
       - "8000:8000"
     environment:
@@ -51,20 +96,27 @@ services:
       TOY_REPO_PATH: /app/toy-repo
       SANDBOX_MODE: docker
       SANDBOX_IMAGE: agentforge-sandbox:latest
+      SANDBOX_EXECUTOR_SOCK: /run/agentforge/executor.sock
+      SANDBOX_WORKSPACE_ROOT: /var/lib/agentforge/workspaces
       TASK_DB_PATH: /var/lib/agentforge/tasks.sqlite
     volumes:
-      # The API process needs the socket to start sandboxes. Sandbox containers
-      # are not given this mount; see docs/sandbox.md.
-      - /var/run/docker.sock:/var/run/docker.sock
       # Task rows survive image rebuilds. The path matches TASK_DB_PATH.
       - agentforge-tasks:/var/lib/agentforge
+      # Same host path the executor gives to dockerd. This is not the Docker socket.
+      - /var/lib/agentforge/workspaces:/var/lib/agentforge/workspaces
+      - executor-sock:/run/agentforge
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      executor:
+        condition: service_healthy
+      api-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:
   pgdata:
   agentforge-tasks:
+  executor-sock:

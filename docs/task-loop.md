@@ -75,4 +75,4 @@ git -C .agentforge/work/toy-copy show <result_branch>:src/ping.py
 
 持有写锁的进程退出后，再启动的进程仍能查到已完成结果。退出时还在 `pending` 或 `running` 的任务会变成 `interrupted`。如果 git 分支已经写出来、数据库还没记成 completed，状态也是 `interrupted`，`demo_completed` 不会变成 true，这条分支不能当成验收通过。另一个还活着的进程不会被这次启动收成 interrupted。
 
-真实模型任务不要设置 `executor`（默认 `pge`）。它需要已有的 `DEEPSEEK_API_KEY` 和 `SANDBOX_MODE=docker` 的沙箱镜像。当前环境没有这份密钥，所以模型质量仍是未验证项。API 进程在 compose 里仍然挂着 Docker socket，沙箱容器本身不挂。
+真实模型任务不要设置 `executor`（默认 `pge`）。它需要已有的 `DEEPSEEK_API_KEY`，以及 compose 里的执行端和本地沙箱镜像。当前环境没有这份密钥，所以模型质量仍是未验证项。API 容器不挂 Docker socket，也不带 docker CLI；只有执行端持有 socket。沙箱容器本身不挂 socket。

@@ -70,7 +70,7 @@ def scan_tree(root: Path) -> dict[str, dict[str, str]]:
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         dirnames[:] = [name for name in dirnames if name not in SKIP_NAMES]
         for filename in filenames:
-            if filename.endswith(".pyc"):
+            if filename.endswith(".pyc") or filename == ".agentforge-seed.json":
                 continue
             full = Path(dirpath) / filename
             relative = full.relative_to(root).as_posix()

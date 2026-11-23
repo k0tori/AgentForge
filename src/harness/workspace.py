@@ -92,17 +92,27 @@ class SprintWorkspace:
             force_reseed: True (默认) 则清除已有 workspace 重新 seed；
                           False 则保留已有内容（retry 时复用上次的代码）。
         """
-        if self.path.exists():
-            if force_reseed:
-                shutil.rmtree(self.path)
+        from src.config import settings
+
+        if settings.SANDBOX_MODE.strip().lower() == "docker":
+            from src.harness.sandbox.client import prepare
+
+            if force_reseed or not _executor_attempt(self.path):
+                self.path = Path(settings.SANDBOX_WORKSPACE_ROOT) / prepare()
             else:
                 logger.info("Sprint workspace preserved for retry: %s", self.path)
                 return str(self.path)
+        elif self.path.exists() and force_reseed:
+            shutil.rmtree(self.path)
+        elif self.path.exists():
+            logger.info("Sprint workspace preserved for retry: %s", self.path)
+            return str(self.path)
         shutil.copytree(
             self.codebase_path,
             self.path,
             ignore=IGNORE_PATTERNS,
             symlinks=True,
+            dirs_exist_ok=True,
         )
         self._write_seed(scan_tree(self.path))
         logger.info("Sprint workspace seeded: %s -> %s", self.codebase_path, self.path)
@@ -230,6 +240,8 @@ class SprintWorkspace:
 
     @property
     def _seed_path(self) -> Path:
+        if _executor_attempt(self.path):
+            return self.path / ".agentforge-seed.json"
         return Path(str(self.path) + ".seed.json")
 
     def _write_seed(self, manifest: dict[str, dict[str, str]]) -> None:
@@ -248,9 +260,28 @@ class SprintWorkspace:
     def discard(self) -> None:
         """FAIL 或合并完成后：丢弃临时目录。"""
         if self.path.exists():
-            shutil.rmtree(self.path, ignore_errors=True)
+            if _executor_attempt(self.path):
+                # The parent is not writable by the API user, so the directory entry stays.
+                for child in list(self.path.iterdir()):
+                    if child.is_symlink() or not child.is_dir():
+                        child.unlink()
+                    else:
+                        shutil.rmtree(child)
+            else:
+                shutil.rmtree(self.path, ignore_errors=True)
             logger.info("Sprint workspace discarded: %s", self.path)
         self._seed_path.unlink(missing_ok=True)
+
+
+def _executor_attempt(path: Path) -> bool:
+    from src.config import settings
+    from src.harness.sandbox.protocol import NAME_RE
+
+    try:
+        root = Path(settings.SANDBOX_WORKSPACE_ROOT).resolve()
+    except OSError:
+        return False
+    return path.resolve().parent == root and NAME_RE.fullmatch(path.name) is not None
 
 
 def published_branch_name(task_id: str) -> str:

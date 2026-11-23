@@ -41,4 +41,6 @@ def sandbox_session(workspace: str, *, task_id: str, role: str):
         yield session
     finally:
         _session.reset(token)
+        # The executor removes its own container when the run connection ends.
+        # This id is not a handle the API can use to delete another container.
         cleanup_attempt(attempt_id)
