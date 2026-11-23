@@ -11,31 +11,38 @@ pip install -e ".[dev]"
 export DETERMINISTIC_EXECUTOR=1
 ```
 
-`DETERMINISTIC_EXECUTOR` 默认关闭。打开之后，下面这条请求只会把你给出的文件内容提交到副本仓库的新分支。它不执行这段代码，也不把 `SANDBOX_MODE` 改成 `host`。默认 `docker` 仍然只作用于真实 PGE 里的 pytest/ruff；守护进程不可用时那些命令失败，不会改在本机执行。
+`DETERMINISTIC_EXECUTOR` 默认关闭。打开之后，下面这条请求把你给出的文件内容提交到副本仓库的新分支。它不执行这段代码，也不跑 pytest/ruff，也不把 `SANDBOX_MODE` 改成 `host`。默认仍是 `docker`。在这个模式下，创建 sprint 工作区会调用执行端的 `prepare`，所以演示也要先有执行端。执行端没起来时这次创建失败，不会改在本机临时目录里做。`SANDBOX_MODE=host` 才会在当前进程里建工作区，那是单独打开的开发模式，不是默认。
 
-任务库是 `.agentforge/tasks.sqlite`，并且只由一个进程持有写锁。启动第二个 `uvicorn` 或 `--workers` 大于 1 时，后来的进程会拒绝成为执行者，不会把前一个进程还在跑的任务标成 interrupted。没有 Postgres 时这个演示任务仍能提交；健康检查里的 postgres 会是 false。
+任务记录在 SQLite，Compose 里是卷上的 `/var/lib/agentforge/tasks.sqlite`，并且只由一个进程持有写锁。`api` 按 Compose 配置会等 Postgres 健康检查通过才启动。启动第二个写进程时，后来的进程会拒绝成为执行者，不会把前一个进程还在跑的任务标成 interrupted。
 
 ## 启动
 
+默认 `docker` 模式用 Compose。API 容器里没有 Docker socket。工作区目录由执行端在宿主路径 `/var/lib/agentforge/workspaces` 上创建，容器内外是同一条路径。这一步不调用模型。沙箱镜像要在跑 pytest/ruff 之前构建；这条演示本身不跑它们，但执行端必须已经在听 Unix socket。
+
 ```bash
-uvicorn src.main:app --port 8000 --workers 1
+docker compose --profile sandbox build sandbox
+docker compose build executor api
+docker compose up -d
 ```
 
-另开一个终端，对 toy-repo 的副本提任务，避免把实验提交写进别的 git 仓库：
+`up` 会带上 `postgres`、`redis`、`executor` 和 `api`。执行端的安装标识是当前 Compose 项目名。同一台机器上的另一套安装要用另一个项目名，否则两边重启会互相删掉沙箱容器。
+
+在 API 容器里准备一份已提交的 toy-repo 副本。路径必须在容器工作目录的 `.agentforge/` 下面：
 
 ```bash
-# 路径必须位于当前工作目录内。在仓库根目录把副本放进工作目录：
-mkdir -p .agentforge/work
-rm -rf .agentforge/work/toy-copy && cp -a toy-repo .agentforge/work/toy-copy
-git -C .agentforge/work/toy-copy init -b main
-git -C .agentforge/work/toy-copy -c user.email=you@example.com -c user.name=You add -A
-git -C .agentforge/work/toy-copy -c user.email=you@example.com -c user.name=You commit -m "demo baseline"
+docker compose exec -u 10002 api bash -c '
+  rm -rf /app/.agentforge/work/toy-copy
+  cp -a /app/toy-repo /app/.agentforge/work/toy-copy
+  git -C /app/.agentforge/work/toy-copy init -b main
+  git -C /app/.agentforge/work/toy-copy -c user.email=you@example.com -c user.name=You add -A
+  git -C /app/.agentforge/work/toy-copy -c user.email=you@example.com -c user.name=You commit -m "demo baseline"
+'
 
 curl -s -X POST http://127.0.0.1:8000/api/v1/tasks/ \
   -H 'Content-Type: application/json' \
   -d '{
     "intent": "Add a ping helper without a model",
-    "codebase": {"type": "local_path", "path": ".agentforge/work/toy-copy"},
+    "codebase": {"type": "local_path", "path": "/app/.agentforge/work/toy-copy"},
     "options": {
       "executor": "deterministic",
       "idempotency_key": "ping-once",
@@ -47,7 +54,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/tasks/ \
   }'
 ```
 
-请求字段是 `intent`，不是 `request`。`codebase.path` 必须是当前工作目录里 `.agentforge/` 下的真实目录，不能是符号链接，也不能指向仓库里的 `toy-repo` 本身。
+请求字段是 `intent`，不是 `request`。`codebase.path` 必须是 API 进程工作目录 `/app` 里 `.agentforge/` 下的真实目录，不能是符号链接，也不能指向镜像里的 `/app/toy-repo` 本身。这条演示不需要 `DEEPSEEK_API_KEY`。
 
 同一个 `idempotency_key` 配上完全相同的请求会返回原来的任务。键相同但 intent、路径或文件内容不同，返回 409，不会去改第二个文件。
 
@@ -62,7 +69,7 @@ curl -s http://127.0.0.1:8000/api/v1/tasks/<task_id>
 副本里的工作区文件不变。查看提交：
 
 ```bash
-git -C .agentforge/work/toy-copy show <result_branch>:src/ping.py
+docker compose exec -u 10002 api git -C /app/.agentforge/work/toy-copy show <result_branch>:src/ping.py
 ```
 
 发布要求副本已经是有提交的 Git 仓库。没有自己的 `.git`，或者还没有 HEAD，会在 `git init`、`add`、`commit`、`worktree` 之前拒绝，不会自动建仓库或 baseline。
@@ -75,4 +82,4 @@ git -C .agentforge/work/toy-copy show <result_branch>:src/ping.py
 
 持有写锁的进程退出后，再启动的进程仍能查到已完成结果。退出时还在 `pending` 或 `running` 的任务会变成 `interrupted`。如果 git 分支已经写出来、数据库还没记成 completed，状态也是 `interrupted`，`demo_completed` 不会变成 true，这条分支不能当成验收通过。另一个还活着的进程不会被这次启动收成 interrupted。
 
-真实模型任务不要设置 `executor`（默认 `pge`）。它需要已有的 `DEEPSEEK_API_KEY` 和 `SANDBOX_MODE=docker` 的沙箱镜像。当前环境没有这份密钥，所以模型质量仍是未验证项。API 进程在 compose 里仍然挂着 Docker socket，沙箱容器本身不挂。
+真实模型任务不要设置 `executor`（默认 `pge`）。它需要已有的 `DEEPSEEK_API_KEY`，以及 compose 里的执行端和本地沙箱镜像。当前环境没有这份密钥，所以模型质量仍是未验证项。API 容器不挂 Docker socket，也不带 docker CLI；只有执行端持有 socket。沙箱容器本身不挂 socket。

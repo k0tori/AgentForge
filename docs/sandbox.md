@@ -16,10 +16,10 @@ docker build -f Dockerfile.sandbox -t agentforge-sandbox:latest .
 
 | `SANDBOX_MODE` | 行为 |
 |---|---|
-| `docker`（默认） | 每次命令启动一个容器。Docker 不可用、镜像缺失或启动失败时抛出错误，**不会**改在宿主上跑。 |
+| `docker`（默认） | API 把 pytest/ruff 交给本机执行端，由执行端启动容器。执行端不可达、镜像缺失或 API 自己能连上 Docker socket 时失败，**不会**改在宿主上跑。 |
 | `host` | 在当前进程里跑 pytest/ruff。只应在你信任工作区内容时手动打开。它能读到本机文件和环境变量。 |
 
-生成和评估各自有一次尝试。同一次尝试里的容器带同一个 `agentforge.attempt` 标签，尝试结束时删除。容器只挂载该次 sprint 工作区到 `/workspace`，根文件系统只读，`/tmp` 是内存盘。
+每次 pytest/ruff 由执行端单独启动容器，连接结束、超时或执行端重启时删除。容器只挂载该次工作区到 `/workspace`，根文件系统只读，`/tmp` 是内存盘。
 
 ## 容器里没有的东西
 
@@ -35,7 +35,15 @@ PGE 截止时间会取消正在等待的协程，并在下一次检查时停止�
 
 ## Compose
 
-`api` 服务挂了宿主的 Docker socket，这样 API 进程才能启动沙箱。**socket 不会进入沙箱容器。** 持有 socket 的 API 进程本身等同于能操作宿主 Docker，这是编排器的残留风险，不要把同一挂载复制到沙箱。
+`executor` 是唯一挂载宿主 Docker socket 的服务，并且以 root 运行。`api` 不挂这个 socket，镜像里也没有 docker CLI，进程用户是 uid/gid `10002`，不在 docker 组。两边把宿主目录 `/var/lib/agentforge/workspaces` 挂到同一个绝对路径；执行端拿这个宿主路径去做 `docker run -v`，不会把执行端容器自己的 `/tmp` 交给宿主 Docker。
+
+API 只通过 `/run/agentforge/executor.sock` 请求 `pytest` 或 `ruff`。请求里不能带镜像、挂载、环境变量、Docker 参数或 shell。执行端核对连接进程的 uid，不是 `10002` 就拒绝。工作区根目录由执行端收成 root 所有且 API 用户不可写，运行目录只能是它创建的一层子目录；根目录本身、`..`、符号链接都会拒绝。这不是做一次 `realpath` 就结束：API 用户写不了父目录，所以换不成符号链接。父目录若因为部署变成 API 可写，执行端拒绝启动。POSIX ACL 不在这次检查里，能写父目录的 root 进程仍可能在 dockerd 打开路径前换掉目录。
+
+每个执行端有一个稳定的安装标识 `SANDBOX_EXECUTOR_ID`。它写在执行端自己的环境里，请求协议没有这个字段，客户端不能指定，也不能拿它去清理别的安装。Compose 把它设成当前项目名（`COMPOSE_PROJECT_NAME`），同一次安装重启后仍是这个值，不会每次启动随机生成。没设置、空白或含空格等非法字符时，执行端直接退出，并且不删除任何容器。两个进程配了同一个标识，就属于同一个清理域：任何一个重启都会删掉这个标识下的沙箱容器，包括另一个进程还在跑的。不同安装要隔离开，必须使用不同的标识。
+
+执行端重启只删除同时带有 `agentforge.managed=1` 和自己的 `agentforge.executor=<标识>` 的容器。进行中的命令因此失败，不会改在宿主上跑。客户端断开或超时只删除这一次启动的那个容器。`SANDBOX_MODE=host` 仍是显式的本机开发选择，不是默认，也不是执行端失败后的退路。API 进程如果自己能连上 Docker socket，预检直接失败。
+
+镜像只用本地的 `agentforge-sandbox:latest`，`--pull never`。按摘要固定镜像还没有做。
 
 ## 测试
 

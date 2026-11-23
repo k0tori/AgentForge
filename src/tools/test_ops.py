@@ -3,14 +3,14 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
-import uuid
 from pathlib import Path
 
 from src.config import settings
 from src.harness.safety.hooks import is_within_workspace
+from src.harness.sandbox import runtime as sandbox_runtime
+from src.harness.sandbox.client import run as run_in_executor
 from src.harness.sandbox.errors import SandboxUnavailableError
-from src.harness.sandbox.runtime import execute_in_docker, warn_host_mode_once
-from src.harness.sandbox.session import current_session
+from src.harness.sandbox.protocol import NAME_RE
 from src.tools.registry import registry
 
 # Truncation limits for tool output
@@ -35,12 +35,26 @@ def _container_target(path: Path, workspace: Path) -> str:
     return relative.as_posix() or "."
 
 
-def _invoke(argv: list[str], workspace: Path, timeout: int) -> subprocess.CompletedProcess[str] | object:
-    """Run argv in Docker, or on the host only when SANDBOX_MODE=host."""
+def _attempt_name(workspace: Path) -> str:
+    root = Path(settings.SANDBOX_WORKSPACE_ROOT).resolve()
+    if workspace.resolve().parent != root or NAME_RE.fullmatch(workspace.name) is None:
+        raise SandboxUnavailableError(
+            "Refusing to run outside an executor workspace. Nothing ran on the host."
+        )
+    return workspace.name
+
+
+def _invoke(kind: str, workspace: Path, timeout: int, target: str = "") -> object:
+    """Run pytest or ruff in the executor, or on the host only when SANDBOX_MODE=host."""
     mode = settings.SANDBOX_MODE.strip().lower()
     if mode == "host":
-        warn_host_mode_once()
-        host_argv = [sys.executable, *argv[1:]]
+        sandbox_runtime.warn_host_mode_once()
+        if kind == "pytest":
+            host_argv = [sys.executable, "-m", "pytest", "-v", "--tb=short"]
+            if target:
+                host_argv.append(str(workspace / target))
+        else:
+            host_argv = [sys.executable, "-m", "ruff", "check", "--output-format=concise", "."]
         return subprocess.run(
             host_argv,
             cwd=str(workspace),
@@ -53,9 +67,12 @@ def _invoke(argv: list[str], workspace: Path, timeout: int) -> subprocess.Comple
         raise SandboxUnavailableError(
             f"Unknown SANDBOX_MODE={settings.SANDBOX_MODE!r}. Use 'docker' or the explicit 'host' opt-in."
         )
-    session = current_session()
-    attempt_id = session.attempt_id if session is not None else f"exec-{uuid.uuid4().hex[:8]}"
-    return execute_in_docker(argv, workspace=str(workspace), timeout=timeout, attempt_id=attempt_id)
+    if not sandbox_runtime.docker_ready():
+        raise SandboxUnavailableError(
+            sandbox_runtime.last_sandbox_block_reason
+            or "Sandbox executor is not reachable. Nothing ran on the host."
+        )
+    return run_in_executor(_attempt_name(workspace), kind, timeout, target)
 
 
 def run_tests(path: str, test_file: str | None = None, allowed_workspace: str | None = None) -> dict:
@@ -63,7 +80,7 @@ def run_tests(path: str, test_file: str | None = None, allowed_workspace: str | 
     _validate_path(path, allowed_workspace)
     p = Path(path)
 
-    cmd = ["python", "-m", "pytest", "-v", "--tb=short"]
+    target = ""
     if test_file:
         if str(test_file).startswith("-"):
             return {
@@ -77,10 +94,10 @@ def run_tests(path: str, test_file: str | None = None, allowed_workspace: str | 
             candidate = p / candidate
         if allowed_workspace and not is_within_workspace(str(candidate), allowed_workspace):
             raise PermissionError(f"test_file '{test_file}' is outside allowed workspace")
-        cmd.append(_container_target(candidate, p))
+        target = _container_target(candidate, p)
 
     try:
-        result = _invoke(cmd, p, timeout=120)
+        result = _invoke("pytest", p, timeout=120, target=target)
         output = result.stdout + result.stderr
 
         # Parse pytest summary line (more robust than counting occurrences)
@@ -118,11 +135,7 @@ def run_lint(path: str, allowed_workspace: str | None = None) -> dict:
     p = Path(path)
 
     try:
-        result = _invoke(
-            ["python", "-m", "ruff", "check", "--output-format=text", "."],
-            p,
-            timeout=30,
-        )
+        result = _invoke("ruff", p, timeout=30)
         issues = [line for line in result.stdout.splitlines() if line.strip()]
         return {
             "issues": issues[:MAX_LINT_ISSUES],

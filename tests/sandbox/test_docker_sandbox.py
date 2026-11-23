@@ -14,6 +14,11 @@ from src.harness.sandbox.runtime import execute_in_docker
 
 pytestmark = [pytest.mark.sandbox, pytest.mark.integration]
 
+
+@pytest.fixture(autouse=True)
+def _executor_instance(monkeypatch):
+    monkeypatch.setattr("src.config.settings.SANDBOX_EXECUTOR_ID", "docker-sandbox-test")
+
 IMAGE = "agentforge-sandbox:latest"
 
 
@@ -60,38 +65,39 @@ def test_container_runs_pytest_without_host_secrets_or_socket(tmp_path: Path, mo
     )
     (workspace / "marker.txt").write_text("inside")
     host_secret = str(host_only)
-
-    script = textwrap.dedent(
-        f"""
-        import os, pathlib, socket
-        env = os.environ
-        assert "DEEPSEEK_API_KEY" not in env
-        assert "host-only-secret" not in "\\n".join(env.values())
-        leaked = pathlib.Path({host_secret!r})
-        assert not leaked.exists()
-        sock = socket.socket()
-        sock.settimeout(2)
-        try:
-            sock.connect(("1.1.1.1", 443))
-        except OSError:
-            pass
-        else:
-            raise SystemExit("network should be disabled")
-        print("sandbox-ok")
-        """
+    (workspace / "test_probe.py").write_text(
+        textwrap.dedent(
+            f"""
+            def test_sandbox_is_closed():
+                import os, pathlib, socket
+                env = os.environ
+                assert "DEEPSEEK_API_KEY" not in env
+                assert "host-only-secret" not in "\\n".join(env.values())
+                assert not pathlib.Path({host_secret!r}).exists()
+                sock = socket.socket()
+                sock.settimeout(2)
+                try:
+                    sock.connect(("1.1.1.1", 443))
+                except OSError:
+                    pass
+                else:
+                    raise AssertionError("network should be disabled")
+            """
+        ),
+        encoding="utf-8",
     )
     attempt = f"probe-{uuid.uuid4().hex[:8]}"
     result = execute_in_docker(
-        ["python", "-c", script],
+        ["python", "-m", "pytest", "-v", "--tb=short", "test_probe.py"],
         workspace=str(workspace),
         timeout=60,
         attempt_id=attempt,
     )
-    assert result.returncode == 0, result.stderr
-    assert "sandbox-ok" in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in (result.stdout + result.stderr)
 
     tests = execute_in_docker(
-        ["python", "-m", "pytest", "-q", "test_inside.py"],
+        ["python", "-m", "pytest", "-v", "--tb=short", "test_inside.py"],
         workspace=str(workspace),
         timeout=60,
         attempt_id=attempt,
@@ -119,13 +125,17 @@ def test_deadline_kills_the_running_container(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("src.config.settings.SANDBOX_IMAGE", IMAGE)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    (workspace / "test_sleep.py").write_text(
+        "import time\n\ndef test_sleep():\n    time.sleep(30)\n",
+        encoding="utf-8",
+    )
     attempt = f"stop-{uuid.uuid4().hex[:8]}"
     token = bind_deadline(2)
     started = time.monotonic()
     try:
         with pytest.raises(DeadlineExceededError):
             execute_in_docker(
-                ["python", "-c", "import time; time.sleep(30)"],
+                ["python", "-m", "pytest", "-v", "--tb=short", "test_sleep.py"],
                 workspace=str(workspace),
                 timeout=60,
                 attempt_id=attempt,

@@ -11,16 +11,22 @@ from src.harness.sandbox.policy import assert_workspace_mountable, build_docker_
 from src.tools.test_ops import run_tests
 
 
+@pytest.fixture(autouse=True)
+def _executor_id(monkeypatch):
+    monkeypatch.setattr("src.config.settings.SANDBOX_EXECUTOR_ID", "policy-test")
+
+
 def test_default_mode_is_docker():
     assert Settings.model_fields["SANDBOX_MODE"].default == "docker"
 
 
 def test_run_command_has_no_socket_or_host_secrets(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("src.config.settings.SANDBOX_EXECUTOR_ID", "policy-test")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "super-secret")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "also-secret")
     command = build_docker_run(
         str(tmp_path),
-        ["python", "-m", "pytest", "-q"],
+        ["python", "-m", "pytest", "-v", "--tb=short"],
         name="agentforge-sbx-policy",
         attempt_id="generate-task-abc",
     )
@@ -34,7 +40,16 @@ def test_run_command_has_no_socket_or_host_secrets(monkeypatch, tmp_path: Path):
     assert "ALL" in command
     assert "--privileged" not in command
     assert command[command.index("-v") + 1].endswith(":/workspace:rw")
-    assert command[-4:] == ["python", "-m", "pytest", "-q"]
+    assert command[command.index("python") :] == ["python", "-m", "pytest", "-v", "--tb=short"]
+    assert "agentforge.managed=1" in command
+    assert "agentforge.executor=policy-test" in command
+
+
+def test_python_c_and_shell_are_rejected(tmp_path: Path):
+    with pytest.raises(SandboxUnavailableError):
+        build_docker_run(str(tmp_path), ["python", "-c", "print(1)"], name="agentforge-sbx-policy", attempt_id="abc")
+    with pytest.raises(SandboxUnavailableError):
+        build_docker_run(str(tmp_path), ["bash", "-lc", "id"], name="agentforge-sbx-policy", attempt_id="abc")
 
 
 def test_refuses_system_mounts():

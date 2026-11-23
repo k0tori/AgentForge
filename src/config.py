@@ -51,6 +51,16 @@ class Settings(BaseSettings):
     SANDBOX_MEMORY: str = "512m"
     SANDBOX_CPUS: str = "1"
     SANDBOX_PIDS_LIMIT: int = 128
+    # The API talks to the executor over this socket. It does not receive the Docker socket.
+    # Stable installation id. Empty means the executor refuses to start.
+    # It is not chosen by the API and is not regenerated on each process start.
+    SANDBOX_EXECUTOR_ID: str = ""
+    SANDBOX_EXECUTOR_SOCK: str = "/run/agentforge/executor.sock"
+    SANDBOX_WORKSPACE_ROOT: str = "/var/lib/agentforge/workspaces"
+    SANDBOX_API_UID: int = 10002
+    SANDBOX_API_GID: int = 10002
+    SANDBOX_RUN_UID: int = 10002
+    SANDBOX_RUN_GID: int = 10002
 
 
 settings = Settings()
