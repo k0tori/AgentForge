@@ -6,7 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from src.harness.workspace import SprintWorkspace
+from src.harness.workspace import SprintWorkspace, git_subprocess_env
 
 
 def test_create_seeds_codebase(tmp_path: Path) -> None:
@@ -68,6 +68,16 @@ def test_merge_copies_back_to_codebase(tmp_path: Path) -> None:
 
     # Verify temp workspace was cleaned up
     assert not os.path.isdir(workspace_path)
+
+
+def test_git_env_drops_api_keys(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-value")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = git_subprocess_env()
+    assert "DEEPSEEK_API_KEY" not in env
+    assert "secret-value" not in env.values()
+    assert env["PATH"] == "/usr/bin"
+    assert env["GIT_CONFIG_GLOBAL"] == "/dev/null"
 
 
 def test_publish_commits_a_branch_and_leaves_the_worktree(tmp_path: Path) -> None:

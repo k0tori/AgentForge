@@ -10,28 +10,44 @@ tempdir (no seed) and Evaluator tested the original codebase_path
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import logging
 import os
 import re
 import shutil
 import subprocess
 import tempfile
-import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-_PUBLISH_LOCKS: dict[str, threading.Lock] = {}
-_PUBLISH_LOCKS_GUARD = threading.Lock()
+_GIT_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT")
 
 
-def _lock_for(path: Path) -> threading.Lock:
-    key = str(path.resolve())
-    with _PUBLISH_LOCKS_GUARD:
-        lock = _PUBLISH_LOCKS.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _PUBLISH_LOCKS[key] = lock
-        return lock
+def git_subprocess_env() -> dict[str, str]:
+    """Environment for git. Host secrets and the rest of the process env stay out."""
+    env = {key: os.environ[key] for key in _GIT_ENV_KEYS if key in os.environ}
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
+@contextmanager
+def _publish_lock(path: Path) -> Iterator[None]:
+    """Exclusive lock across processes. A threading.Lock would not do this."""
+    digest = hashlib.sha256(str(path.resolve()).encode()).hexdigest()
+    directory = Path(tempfile.gettempdir()) / "agentforge-publish-locks"
+    directory.mkdir(parents=True, exist_ok=True)
+    handle = os.open(directory / digest, os.O_CREAT | os.O_RDWR, 0o644)
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    try:
+        yield
+    finally:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        os.close(handle)
 
 # Patterns excluded when seeding or merging the workspace
 IGNORE_PATTERNS = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".pytest_cache", "node_modules")
@@ -46,7 +62,7 @@ class SprintWorkspace:
         self.sprint = sprint
         self.path = Path(tempfile.gettempdir()) / f"agentforge_sprint_{task_id}_{sprint}"
 
-    def create(self, *, force_reseed: bool = True) -> str:
+    def create(self, *, force_reseed: bool = True, preserve_symlinks: bool = False) -> str:
         """Seed: 把现有代码完整拷进 sprint workspace，Generator 在这个基础上改。
 
         Args:
@@ -59,7 +75,12 @@ class SprintWorkspace:
             else:
                 logger.info("Sprint workspace preserved for retry: %s", self.path)
                 return str(self.path)
-        shutil.copytree(self.codebase_path, self.path, ignore=IGNORE_PATTERNS)
+        shutil.copytree(
+            self.codebase_path,
+            self.path,
+            ignore=IGNORE_PATTERNS,
+            symlinks=preserve_symlinks,
+        )
         logger.info("Sprint workspace seeded: %s -> %s", self.codebase_path, self.path)
         return str(self.path)
 
@@ -78,7 +99,7 @@ class SprintWorkspace:
         if not self.path.is_dir():
             raise FileNotFoundError(f"Sprint workspace does not exist: {self.path}")
         branch = _branch_name(self.task_id)
-        with _lock_for(self.codebase_path):
+        with _publish_lock(self.codebase_path):
             return self._publish_locked(branch)
 
     def _publish_locked(self, branch: str) -> str:
@@ -116,6 +137,11 @@ class SprintWorkspace:
 _SKIP_NAMES = frozenset({".git", "__pycache__", ".pytest_cache", "node_modules", ".venv", "venv"})
 
 
+def published_branch_name(task_id: str) -> str:
+    """Branch name publish() would use for this task. It is not an acceptance."""
+    return _branch_name(task_id)
+
+
 def _branch_name(task_id: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", task_id).strip("-") or "task"
     return f"agentforge/{safe}"
@@ -130,7 +156,14 @@ def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
         "-c", "init.defaultBranch=main",
         *args,
     ]
-    return subprocess.run(command, cwd=cwd, check=check, capture_output=True, text=True)
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        check=check,
+        capture_output=True,
+        text=True,
+        env=git_subprocess_env(),
+    )
 
 
 def _sync_tree(source: Path, destination: Path) -> None:

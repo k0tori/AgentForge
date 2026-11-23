@@ -8,17 +8,17 @@
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-export SANDBOX_MODE=host
+export DETERMINISTIC_EXECUTOR=1
 ```
 
-`SANDBOX_MODE=host` 会在本机跑 pytest/ruff。只在你信任仓库内容时使用。默认 `docker` 在没有守护进程时会失败，而不会偷偷改在本机执行。
+`DETERMINISTIC_EXECUTOR` 默认关闭。打开之后，下面这条请求只会把你给出的文件内容提交到副本仓库的新分支。它不执行这段代码，也不把 `SANDBOX_MODE` 改成 `host`。默认 `docker` 仍然只作用于真实 PGE 里的 pytest/ruff；守护进程不可用时那些命令失败，不会改在本机执行。
 
-任务记录写在 `.agentforge/tasks.sqlite`。没有 Postgres 时 API 仍能接这个确定性任务；健康检查里的 postgres 会是 false。
+任务库是 `.agentforge/tasks.sqlite`，并且只由一个进程持有写锁。启动第二个 `uvicorn` 或 `--workers` 大于 1 时，后来的进程会拒绝成为执行者，不会把前一个进程还在跑的任务标成 interrupted。没有 Postgres 时这个演示任务仍能提交；健康检查里的 postgres 会是 false。
 
 ## 启动
 
 ```bash
-uvicorn src.main:app --port 8000
+uvicorn src.main:app --port 8000 --workers 1
 ```
 
 另开一个终端，对 toy-repo 的副本提任务，避免把实验提交写进别的 git 仓库：
@@ -44,7 +44,9 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/tasks/ \
   }'
 ```
 
-请求字段是 `intent`，不是 `request`。重复同一个 `idempotency_key` 会返回原来的任务，不会再改一次。
+请求字段是 `intent`，不是 `request`。`codebase.path` 必须是当前工作目录里 `.agentforge/` 下的真实目录，不能是符号链接，也不能指向仓库里的 `toy-repo` 本身。
+
+同一个 `idempotency_key` 配上完全相同的请求会返回原来的任务。键相同但 intent、路径或文件内容不同，返回 409，不会去改第二个文件。
 
 ## 查询
 
@@ -52,7 +54,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/tasks/ \
 curl -s http://127.0.0.1:8000/api/v1/tasks/<task_id>
 ```
 
-完成后 `status` 为 `completed`，`result.result_branch` 是分支名，`result.code_diff` 是 diff。`result.note` 写明这次没有调用模型。
+演示做完时 `status` 为 `completed`，`result.demo_completed` 为 true，`result.acceptance` 为 `not_run`，`result.final_verdict` 为 null。这表示文件已经出现在分支上，传感器没有跑，**不是** PGE 的 PASS。`result.result_branch` 是分支名，`result.code_diff` 是 diff。
 
 副本里的工作区文件不变。查看提交：
 
@@ -60,6 +62,6 @@ curl -s http://127.0.0.1:8000/api/v1/tasks/<task_id>
 git -C .agentforge/work/toy-copy show <result_branch>:src/ping.py
 ```
 
-服务重启后，同一条 `GET` 仍能查到完成结果。重启时还在 `pending` 或 `running` 的任务会变成 `interrupted`，并带有错误说明，不会继续显示 running。
+持有写锁的进程退出后，再启动的进程仍能查到已完成结果。退出时还在 `pending` 或 `running` 的任务会变成 `interrupted`。如果 git 分支已经写出来、数据库还没记成 completed，状态也是 `interrupted`，`demo_completed` 不会变成 true，这条分支不能当成验收通过。另一个还活着的进程不会被这次启动收成 interrupted。
 
-真实模型任务省略 `options.executor`（默认 `pge`），并需要可用的 `DEEPSEEK_API_KEY` 与 `SANDBOX_MODE=docker` 的沙箱镜像。那不是这条确定性验收。
+真实模型任务不要设置 `executor`（默认 `pge`）。它需要已有的 `DEEPSEEK_API_KEY` 和 `SANDBOX_MODE=docker` 的沙箱镜像。当前环境没有这份密钥，所以模型质量仍是未验证项。API 进程在 compose 里仍然挂着 Docker socket，沙箱容器本身不挂。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import uuid
@@ -10,7 +11,8 @@ from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from src.api.schemas.task import TaskCreateRequest, TaskCreateResponse, TaskStatusResponse
-from src.api.task_manager import TaskEvent, TaskStatus, task_manager
+from src.api.task_manager import IdempotencyConflictError, TaskEvent, TaskStatus, WorkerBusyError, task_manager
+from src.config import settings
 from src.workflow.deterministic import run_deterministic_change
 from src.workflow.graph import run_task
 
@@ -33,6 +35,44 @@ def _validate_codebase_path(path: str) -> str:
     except ValueError:
         raise HTTPException(status_code=400, detail="Path must be within project directory") from None
     return str(resolved)
+
+
+def _assert_deterministic_codebase(original: str, resolved: str) -> None:
+    """Demo writes may only target a real directory under .agentforge/."""
+    agentforge = Path.cwd() / ".agentforge"
+    if agentforge.is_symlink():
+        raise HTTPException(status_code=400, detail="deterministic codebase must not be reached through a symlink")
+    root = agentforge.resolve()
+    resolved_path = Path(resolved)
+    if not resolved_path.is_dir():
+        raise HTTPException(status_code=400, detail="deterministic codebase must be a directory under .agentforge/")
+    try:
+        resolved_path.relative_to(root)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="deterministic codebase must be a directory under .agentforge/",
+        ) from None
+    probe = Path(original)
+    if not probe.is_absolute():
+        probe = Path.cwd() / probe
+    walking = Path(probe.anchor) if probe.is_absolute() else Path.cwd()
+    parts = probe.parts[1:] if probe.is_absolute() else probe.parts
+    for part in parts:
+        walking = walking / part
+        if walking.is_symlink():
+            raise HTTPException(status_code=400, detail="deterministic codebase must not be reached through a symlink")
+
+
+def _request_hash(intent: str, codebase_path: str, options: dict) -> str:
+    body = {
+        "change": options.get("change"),
+        "codebase_path": codebase_path,
+        "executor": options.get("executor", "pge"),
+        "intent": intent,
+    }
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 def _sse_payload(data: object) -> str:
@@ -58,12 +98,30 @@ async def create_task(request: TaskCreateRequest) -> TaskCreateResponse:
     idempotency_key = options.get("idempotency_key")
     if idempotency_key is not None and not isinstance(idempotency_key, str):
         raise HTTPException(status_code=400, detail="idempotency_key must be a string")
+    if isinstance(idempotency_key, str) and not idempotency_key.strip():
+        raise HTTPException(status_code=400, detail="idempotency_key must be non-empty")
+    if executor == "deterministic":
+        if not settings.DETERMINISTIC_EXECUTOR:
+            raise HTTPException(
+                status_code=403,
+                detail="deterministic executor is disabled; set DETERMINISTIC_EXECUTOR=1 to run the demo",
+            )
+        _assert_deterministic_codebase(request.codebase.get("path", "./toy-repo"), codebase_path)
 
-    task = task_manager.create_task(
-        intent=request.intent,
-        codebase_path=codebase_path,
-        idempotency_key=idempotency_key,
-    )
+    try:
+        task = task_manager.create_task(
+            intent=request.intent,
+            codebase_path=codebase_path,
+            idempotency_key=idempotency_key,
+            request_hash=_request_hash(request.intent, codebase_path, options),
+        )
+    except IdempotencyConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"idempotency key already belongs to a different request: {exc.task_id}",
+        ) from None
+    except WorkerBusyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
     if task_manager.claim_execution(task.task_id):
         bg_task = asyncio.create_task(
             _execute_task(task.task_id, request.intent, codebase_path, options)
@@ -105,6 +163,11 @@ async def _execute_task(
                 codebase_path=codebase_path,
                 task_id=str(task_id),
                 change=(options or {}).get("change") or {},
+                on_published=lambda branch: task_manager.record_branch(task_id, branch),
+            )
+            await task_manager.emit_event(
+                task_id,
+                TaskEvent(event="step_update", data={"agent": "deterministic", "step": "demo_published"}),
             )
         else:
             result = await run_task(
@@ -112,12 +175,10 @@ async def _execute_task(
                 codebase_path=codebase_path,
                 task_id=str(task_id),
             )
-
-        # Emit completion event
-        await task_manager.emit_event(
-            task_id,
-            TaskEvent(event="step_update", data={"agent": "evaluator", "step": "complete"}),
-        )
+            await task_manager.emit_event(
+                task_id,
+                TaskEvent(event="step_update", data={"agent": "evaluator", "step": "complete"}),
+            )
 
         # Set result
         trace = result.get("execution_trace", [])
@@ -126,6 +187,8 @@ async def _execute_task(
             summary = len(trace) if isinstance(trace, list) else 0
         task_manager.set_result(task_id, {
             "final_verdict": result.get("final_verdict"),
+            "acceptance": result.get("acceptance"),
+            "demo_completed": bool(result.get("demo_completed", False)),
             "executor": result.get("executor", "pge"),
             "note": result.get("note"),
             "sprint_contract": result.get("sprint_contract", []),

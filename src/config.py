@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     TOY_REPO_PATH: str = "./toy-repo"
     TASK_DB_PATH: str = ".agentforge/tasks.sqlite"
+    # Demo writer. Off unless a developer opts in. It is not the PGE path.
+    DETERMINISTIC_EXECUTOR: bool = False
 
     # Embedding
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
