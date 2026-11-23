@@ -198,13 +198,14 @@ class SprintWorkspace:
 
     def _reject_executable_filters(self) -> None:
         """hooksPath does not stop clean/smudge filters. Refuse them before checkout."""
-        configured = _git(self.codebase_path, "config", "--local", "--get-regexp", "^filter\\.", check=False)
-        if configured.returncode == 0 and configured.stdout.strip():
+        config_file = self.codebase_path / ".git" / "config"
+        config_text = config_file.read_text(encoding="utf-8", errors="replace") if config_file.is_file() else ""
+        if re.search(r"(?im)^\[filter(\s|\])", config_text):
             raise PublishRejectedError(
-                "Refusing to publish: this repository configures a git clean/smudge filter. "
+                "Refusing to publish: .git/config defines a clean/smudge filter. "
                 "core.hooksPath does not disable filters, so checkout and git add would run "
-                "repository commands on the host. Remove filter.* from .git/config and filter= "
-                "attributes, then retry. Nothing was committed."
+                "repository commands on the host. Remove the [filter] section and retry. "
+                "Nothing was committed."
             )
         for attributes in self.codebase_path.rglob(".gitattributes"):
             if ".git" in attributes.parts:

@@ -217,6 +217,7 @@ async def _execute_task(
         task_manager.set_result(task_id, public)
 
     except DeadlineExceededError as exc:
+        logger.error("Task %s stopped at the deadline", task_id)
         branch = exc.branch or ""
         message = MESSAGES["execution_timeout"]
         if branch:
@@ -232,6 +233,7 @@ async def _execute_task(
             "note": message,
         })
     except PublishRejectedError as exc:
+        logger.error("Task %s publish rejected: %s", task_id, sanitize(str(exc)))
         branch = exc.branch or ""
         message = str(exc)
         if branch:

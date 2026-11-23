@@ -76,7 +76,7 @@ async def test_deterministic_task_publishes_a_branch_and_keeps_the_worktree(task
             assert created.status_code == 202
             body = created.json()
             finished = await _wait_terminal(client, body["task_id"])
-        assert finished["status"] == "completed"
+        assert finished["status"] == "completed", finished.get("error")
         assert finished["error"] is None
         result = finished["result"]
         assert result["executor"] == "deterministic"
@@ -139,7 +139,7 @@ async def test_same_idempotency_key_and_body_reuses_one_task(task_db: Path):
             assert second.status_code == 202
             assert first.json()["task_id"] == second.json()["task_id"]
             finished = await _wait_terminal(client, first.json()["task_id"])
-        assert finished["status"] == "completed"
+        assert finished["status"] == "completed", finished.get("error")
         assert finished["result"]["demo_completed"] is True
         assert finished["result"]["acceptance"] == "not_run"
     finally:
@@ -157,7 +157,7 @@ async def test_same_idempotency_key_with_different_body_conflicts(task_db: Path)
             assert second.status_code == 409
             assert first.json()["task_id"] in second.json()["detail"]
             finished = await _wait_terminal(client, first.json()["task_id"])
-        assert finished["status"] == "completed"
+        assert finished["status"] == "completed", finished.get("error")
         assert not (codebase / "src" / "other.py").exists()
         branch = finished["result"]["result_branch"]
         show = subprocess.run(
@@ -186,6 +186,8 @@ async def test_concurrent_tasks_do_not_share_branches(task_db: Path):
                 _wait_terminal(client, first.json()["task_id"]),
                 _wait_terminal(client, second.json()["task_id"]),
             )
+        assert done_one["status"] == "completed", done_one.get("error")
+        assert done_two["status"] == "completed", done_two.get("error")
         assert done_one["result"]["result_branch"] != done_two["result"]["result_branch"]
         assert 'return "src/one.py"' in done_one["result"]["code_diff"]
         assert 'return "src/two.py"' in done_two["result"]["code_diff"]
