@@ -17,6 +17,9 @@ pytestmark = [pytest.mark.sandbox, pytest.mark.integration]
 
 @pytest.fixture(autouse=True)
 def _executor_instance(monkeypatch):
+    from src.harness.sandbox.runtime import reset_image_pin
+
+    reset_image_pin()
     monkeypatch.setattr("src.config.settings.SANDBOX_EXECUTOR_ID", "docker-sandbox-test")
 
 IMAGE = "agentforge-sandbox:latest"

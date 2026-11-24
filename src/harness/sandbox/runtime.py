@@ -113,6 +113,13 @@ _MISSING_IMAGE = (
 )
 
 
+def reset_image_pin() -> None:
+    """Forget a pin. Tests that rebuild the tag call this. The executor process does not."""
+    global _pinned_image, _pin_attempted
+    _pinned_image = None
+    _pin_attempted = False
+
+
 def pin_configured_image() -> str | None:
     """Resolve SANDBOX_IMAGE once to its local image id.
 
