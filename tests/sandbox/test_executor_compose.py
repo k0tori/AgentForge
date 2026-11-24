@@ -779,6 +779,10 @@ def test_failed_sandbox_does_not_make_executor_ready(tmp_path: Path):
     try:
         up = subprocess.run(argv, capture_output=True, text=True, timeout=900, check=False, cwd=ROOT)
         assert up.returncode != 0, up.stdout + up.stderr
+        sandbox_id = _service_id(project, "sandbox")
+        assert sandbox_id, up.stdout + up.stderr
+        assert _inspect(sandbox_id, "{{.State.ExitCode}}") == "1"
+        assert "sandbox" in (up.stdout + up.stderr).lower()
         running = _compose_project(project, "ps", "--status", "running", "--services", timeout=30)
         assert "executor" not in running.stdout.split()
         executor_id = _service_id(project, "executor")

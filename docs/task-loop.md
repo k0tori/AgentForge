@@ -23,7 +23,13 @@ export DETERMINISTIC_EXECUTOR=1
 docker compose up -d --build
 ```
 
-`up --build` 会构建沙箱镜像，并带上 `postgres`、`redis`、一次性的 `sandbox`、`executor` 和 `api`。`sandbox` 退出后镜像留在本地，不常驻，也不挂 Docker socket。执行端的安装标识是当前 Compose 项目名。同一台机器上的另一套安装要用另一个项目名，否则两边重启会互相删掉沙箱容器。
+这条命令不带服务名。它会构建沙箱镜像，并带上 `postgres`、`redis`、一次性的 `sandbox`、`executor` 和 `api`。`sandbox` 以退出码 0 结束后镜像留在本地，不常驻，也不挂 Docker socket。依赖没成功时，后面的 `executor` / `api` 不会变成 ready。执行端的安装标识是当前 Compose 项目名。同一台机器上的另一套安装要用另一个项目名，否则两边重启会互相删掉沙箱容器。
+
+默认不会设置 `DETERMINISTIC_EXECUTOR`，所以演示请求会被拒绝。只在要跑下面这条演示时，用同一条不带服务名的命令显式打开，它会按新环境重建 API 容器：
+
+```bash
+DETERMINISTIC_EXECUTOR=1 docker compose up -d --build
+```
 
 在 API 容器里准备一份已提交的 toy-repo 副本。路径必须在容器工作目录的 `.agentforge/` 下面：
 
