@@ -30,7 +30,7 @@
 
 - [ ] 真实模型 smoke 只在已有凭据时跑，并单独报告，不与确定性闭环混为一谈
 - [x] API 进程不再直接持有 Docker socket（M3，`03e02cbc65f52ade5acd85c0d06a54d9be6cca5e`）
-- [ ] 沙箱镜像随默认 Compose 构建发布，并按本地摘要运行（M4，本分支，待验收）
+- [ ] 沙箱镜像随默认 Compose 构建发布，并在进程内固定本地 image ID（M4，本分支，待验收）
 
 ## 本轮（M1）完成标准
 
@@ -68,7 +68,7 @@ PR #3，head `03e02cbc65f52ade5acd85c0d06a54d9be6cca5e`。API 不持有 Docker s
 
 ## M4
 
-默认 `docker compose up -d --build` 构建沙箱镜像，不再依赖单独的 sandbox profile。执行端启动后把本地镜像钉成 `sha256` id，`docker run` 使用这个 id，`--pull never`。镜像不在本地时失败，不拉取，不在宿主执行。
+默认 `docker compose up -d --build` 构建沙箱镜像，不再依赖单独的 sandbox profile。执行端在进程内固定 `docker image inspect` 的本地 image ID，`docker run` 使用这个 ID，`--pull never`。这不是 registry digest，重启会重新解析当前标签。镜像不在本地或已固定的 ID 被删除时失败，不拉取，不在宿主执行。
 
 未做：真实模型 smoke、git 发布进沙箱、多 worker、UI、POSIX ACL、容器逃逸证明、向外部仓库推镜像。
 

@@ -609,69 +609,185 @@ def _start_named_executor(name: str, instance: str, root: Path, sock: Path, imag
     assert _wait_until(listening, 20), logs
 
 
-def test_default_compose_build_publishes_the_sandbox_image():
-    """No sandbox profile. `docker compose build sandbox` is part of the default file."""
+def _raw_pytest(root: Path, sock: Path) -> subprocess.CompletedProcess[str]:
+    """Send prepare and a real pytest run. Prints `RUN <error-or-exit>`."""
+    script = textwrap.dedent(
+        """
+        import json, os, socket
+        from pathlib import Path
+
+        def talk(payload):
+            sock = socket.socket(socket.AF_UNIX)
+            sock.settimeout(30)
+            sock.connect("/run/agentforge/executor.sock")
+            body = json.dumps(payload).encode()
+            sock.sendall(len(body).to_bytes(4, "big") + body)
+            size = int.from_bytes(sock.recv(4), "big")
+            data = b""
+            while len(data) < size:
+                chunk = sock.recv(size - len(data))
+                if not chunk:
+                    break
+                data += chunk
+            sock.close()
+            return json.loads(data.decode())
+
+        prepared = talk({"op": "prepare"})
+        if not prepared.get("ok"):
+            print("RUN", prepared.get("error"))
+            raise SystemExit(0)
+        name = prepared["name"]
+        target = Path(os.environ["SANDBOX_WORKSPACE_ROOT"]) / name
+        target.joinpath("test_missing.py").write_text(
+            "def test_missing():\\n    assert True\\n",
+            encoding="utf-8",
+        )
+        ran = talk({
+            "op": "run",
+            "name": name,
+            "cmd": "pytest",
+            "timeout": 30,
+            "target": "test_missing.py",
+        })
+        if ran.get("ok"):
+            print("RUN exit", ran.get("exit_code"))
+        else:
+            print("RUN", ran.get("error"))
+        """
+    )
+    return subprocess.run(
+        [
+            "docker", "run", "--rm", "--user", "10002:10002",
+            "--entrypoint", "python",
+            "-v", f"{root}:{root}",
+            "-v", f"{sock}:/run/agentforge",
+            "-e", "SANDBOX_EXECUTOR_SOCK=/run/agentforge/executor.sock",
+            "-e", f"SANDBOX_WORKSPACE_ROOT={root}",
+            "agentforge-executor:latest",
+            "-c", script,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+
+
+# Documented command is `docker compose up -d --build`.
+# Naming executor still keeps its default depends_on (sandbox) and does not pass --no-deps.
+# postgres, redis, and api are not started, so this is not an unfiltered full-stack boot.
+_DOCUMENTED_UP = ("up", "-d", "--build", "executor")
+
+
+def _compose_project(project: str, *args: str, timeout: int = 180) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["docker", "compose", "-p", project, "-f", str(ROOT / "docker-compose.yml"), *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+        cwd=ROOT,
+    )
+
+
+def _service_id(project: str, service: str) -> str:
+    listed = _compose_project(project, "ps", "-aq", service, timeout=30)
+    assert listed.returncode == 0, listed.stderr
+    return listed.stdout.strip().splitlines()[-1] if listed.stdout.strip() else ""
+
+
+def _inspect(container_id: str, template: str) -> str:
+    probe = subprocess.run(
+        ["docker", "inspect", "-f", template, container_id],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert probe.returncode == 0, probe.stderr
+    return probe.stdout.strip()
+
+
+def test_documented_up_build_runs_executor_after_sandbox():
+    """`docker compose up -d --build executor` includes the default sandbox dependency."""
     _require_compose()
-    project = f"m4img{uuid.uuid4().hex[:6]}"
-    base = ["docker", "compose", "-p", project, "-f", str(ROOT / "docker-compose.yml")]
-    services = subprocess.run(
-        [*base, "config", "--services"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-        cwd=ROOT,
-    )
-    assert services.returncode == 0, services.stderr
-    assert "sandbox" in services.stdout.split()
-    rendered = subprocess.run(
-        [*base, "config"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-        cwd=ROOT,
-    )
-    assert rendered.returncode == 0, rendered.stderr
-    assert "pull_policy: never" in rendered.stdout
-    built = subprocess.run(
-        [*base, "build", "sandbox"],
-        capture_output=True,
-        text=True,
-        timeout=600,
-        check=False,
-        cwd=ROOT,
-    )
-    assert built.returncode == 0, built.stderr[-2000:]
-    assert "--profile" not in built.args
-    present = subprocess.run(
-        ["docker", "image", "inspect", "agentforge-sandbox:latest"],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
-    assert present.returncode == 0, present.stderr
-    one_shot = subprocess.run(
-        [*base, "up", "-d", "--no-deps", "sandbox"],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-        cwd=ROOT,
-    )
-    assert one_shot.returncode == 0, one_shot.stderr[-2000:]
-    state = subprocess.run(
-        [*base, "ps", "-a", "--format", "json"],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-        cwd=ROOT,
-    )
-    assert state.returncode == 0, state.stderr
-    assert '"Service":"sandbox"' in state.stdout or '"Service": "sandbox"' in state.stdout
-    subprocess.run([*base, "down", "--remove-orphans"], capture_output=True, check=False, cwd=ROOT)
+    project = f"m4up{uuid.uuid4().hex[:6]}"
+    argv = ["docker", "compose", "-p", project, "-f", str(ROOT / "docker-compose.yml"), *_DOCUMENTED_UP]
+    assert "--no-deps" not in argv
+    assert tuple(argv[-4:]) == _DOCUMENTED_UP
+    try:
+        up = subprocess.run(argv, capture_output=True, text=True, timeout=900, check=False, cwd=ROOT)
+        assert up.returncode == 0, up.stderr[-3000:]
+        sandbox_id = _service_id(project, "sandbox")
+        executor_id = _service_id(project, "executor")
+        assert sandbox_id and executor_id
+        assert _inspect(sandbox_id, "{{.State.Status}}") == "exited"
+        assert _inspect(sandbox_id, "{{.State.ExitCode}}") == "0"
+        assert _inspect(sandbox_id, "{{.State.FinishedAt}}") <= _inspect(executor_id, "{{.State.StartedAt}}")
+
+        def healthy() -> bool:
+            return _inspect(executor_id, "{{.State.Health.Status}}") == "healthy"
+
+        assert _wait_until(healthy, 40), _inspect(executor_id, "{{.State.Status}}")
+        ran = subprocess.run(
+            [
+                "docker", "run", "--rm", "--user", "10002:10002",
+                "--entrypoint", "python",
+                "-v", "/var/lib/agentforge/workspaces:/var/lib/agentforge/workspaces",
+                "-v", f"{project}_executor-sock:/run/agentforge",
+                "-e", "SANDBOX_EXECUTOR_SOCK=/run/agentforge/executor.sock",
+                "-e", "SANDBOX_WORKSPACE_ROOT=/var/lib/agentforge/workspaces",
+                "agentforge-executor:latest",
+                "-c",
+                (
+                    "import os; from pathlib import Path; "
+                    "from src.harness.sandbox.client import prepare, run; "
+                    "name=prepare(); "
+                    "target=Path(os.environ['SANDBOX_WORKSPACE_ROOT'])/name; "
+                    "target.joinpath('test_chain.py').write_text("
+                    "'def test_chain():\\n    assert True\\n', encoding='utf-8'); "
+                    "result=run(name, 'pytest', 60, 'test_chain.py'); "
+                    "raise SystemExit(result.returncode)"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        assert ran.returncode == 0, ran.stdout + ran.stderr
+    finally:
+        _compose_project(project, "down", "--remove-orphans", timeout=180)
+        leftovers = _instance_ids(project)
+        if leftovers:
+            subprocess.run(["docker", "rm", "-f", *leftovers], capture_output=True, check=False)
+
+
+def test_failed_sandbox_does_not_make_executor_ready(tmp_path: Path):
+    """A failed sandbox dependency must not leave the executor running."""
+    _require_compose()
+    project = f"m4bad{uuid.uuid4().hex[:6]}"
+    override = tmp_path / "sandbox-fail.yml"
+    override.write_text("services:\n  sandbox:\n    entrypoint: ['false']\n", encoding="utf-8")
+    argv = [
+        "docker", "compose", "-p", project,
+        "-f", str(ROOT / "docker-compose.yml"),
+        "-f", str(override),
+        *_DOCUMENTED_UP,
+    ]
+    assert "--no-deps" not in argv
+    try:
+        up = subprocess.run(argv, capture_output=True, text=True, timeout=900, check=False, cwd=ROOT)
+        assert up.returncode != 0, up.stdout + up.stderr
+        running = _compose_project(project, "ps", "--status", "running", "--services", timeout=30)
+        assert "executor" not in running.stdout.split()
+        executor_id = _service_id(project, "executor")
+        if executor_id:
+            assert _inspect(executor_id, "{{.State.Running}}") == "false"
+            health = _inspect(executor_id, "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}")
+            assert health != "healthy"
+    finally:
+        _compose_project(project, "down", "--remove-orphans", timeout=180)
 
 
 def test_missing_image_is_not_pulled(stack: str):
@@ -685,36 +801,18 @@ def test_missing_image_is_not_pulled(stack: str):
     sock = base / "sock"
     try:
         _start_named_executor(name, instance, root, sock, tag)
-        client = subprocess.run(
-            [
-                "docker", "run", "--rm", "--user", "10002:10002",
-                "--entrypoint", "python",
-                "-v", f"{root}:{root}",
-                "-v", f"{sock}:/run/agentforge",
-                "-e", "SANDBOX_EXECUTOR_SOCK=/run/agentforge/executor.sock",
-                "-e", f"SANDBOX_WORKSPACE_ROOT={root}",
-                "agentforge-executor:latest",
-                "-c",
-                (
-                    "import json,socket; "
-                    "s=socket.socket(socket.AF_UNIX); s.settimeout(5); "
-                    "s.connect('/run/agentforge/executor.sock'); "
-                    "body=json.dumps({'op':'ping'}).encode(); "
-                    "s.sendall(len(body).to_bytes(4,'big')+body); "
-                    "n=int.from_bytes(s.recv(4),'big'); "
-                    "print(s.recv(n).decode())"
-                ),
-            ],
+        client = _raw_pytest(root, sock)
+        assert client.returncode == 0, client.stdout + client.stderr
+        assert "RUN image_missing" in client.stdout
+        assert "passed" not in client.stdout.lower()
+        logs = subprocess.run(
+            ["docker", "logs", name],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=20,
             check=False,
         )
-        assert client.returncode == 0, client.stderr
-        payload = json.loads(client.stdout)
-        assert payload["ok"] is True
-        assert payload["image_present"] is False
-        assert payload["image"] == tag
+        assert "was not pulled" in (logs.stdout + logs.stderr)
         absent = subprocess.run(
             ["docker", "image", "inspect", tag],
             capture_output=True,
@@ -729,6 +827,89 @@ def test_missing_image_is_not_pulled(stack: str):
         leftovers = _instance_ids(instance)
         if leftovers:
             subprocess.run(["docker", "rm", "-f", *leftovers], capture_output=True, check=False)
+        subprocess.run(
+            [
+                "docker", "run", "--rm", "--user", "0",
+                "-v", f"{base}:/cleanup", "agentforge-sandbox:latest",
+                "python", "-c", "import shutil; shutil.rmtree('/cleanup', ignore_errors=True)",
+            ],
+            capture_output=True,
+            check=False,
+        )
+
+
+def test_deleted_pinned_image_id_fails_a_real_run(stack: str):
+    """Remove only an isolated image id. Do not delete agentforge-sandbox:latest."""
+    del stack
+    suffix = uuid.uuid4().hex[:8]
+    tag = f"agentforge-iso-{suffix}:local"
+    instance = f"iso-{suffix}"
+    name = f"af-iso-{suffix}"
+    base = Path("/tmp") / f"agentforge-iso-{suffix}"
+    root = base / "var" / "lib" / "workspaces"
+    sock = base / "sock"
+    dockerfile = base / "Dockerfile"
+    image_id = ""
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        dockerfile.write_text(
+            "FROM python:3.12-slim-bookworm\nRUN echo isolated > /opt/isolated.txt\n",
+            encoding="utf-8",
+        )
+        built = subprocess.run(
+            ["docker", "build", "-t", tag, str(base)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        assert built.returncode == 0, built.stderr[-2000:]
+        inspected = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", tag],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        assert inspected.returncode == 0, inspected.stderr
+        image_id = inspected.stdout.strip()
+        _start_named_executor(name, instance, root, sock, tag)
+        removed = subprocess.run(
+            ["docker", "rmi", tag],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert removed.returncode == 0, removed.stderr
+        gone = subprocess.run(
+            ["docker", "image", "inspect", image_id],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        assert gone.returncode != 0, "isolated image id is still present; refusing to delete other tags"
+        client = _raw_pytest(root, sock)
+        assert client.returncode == 0, client.stdout + client.stderr
+        assert "RUN image_missing" in client.stdout
+        assert "passed" not in client.stdout.lower()
+        assert _instance_ids(instance) == []
+        latest = subprocess.run(
+            ["docker", "image", "inspect", "agentforge-sandbox:latest"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        assert latest.returncode == 0
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False)
+        leftovers = _instance_ids(instance)
+        if leftovers:
+            subprocess.run(["docker", "rm", "-f", *leftovers], capture_output=True, check=False)
+        if image_id:
+            subprocess.run(["docker", "rmi", image_id], capture_output=True, check=False)
         subprocess.run(
             [
                 "docker", "run", "--rm", "--user", "0",
