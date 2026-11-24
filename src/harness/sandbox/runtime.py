@@ -103,6 +103,50 @@ def local_docker_ready() -> bool:
     return probe.returncode == 0
 
 
+_pinned_image: str | None = None
+_pin_attempted = False
+
+_MISSING_IMAGE = (
+    "The sandbox image is not present locally. "
+    "Build it with `docker compose build sandbox` or `docker compose up --build`. "
+    "Nothing was pulled and nothing ran on the host."
+)
+
+
+def pin_configured_image() -> str | None:
+    """Resolve SANDBOX_IMAGE once to its local image id.
+
+    Later changes to that tag are ignored. A missing image stays missing until
+    this process starts again. This does not pull.
+    """
+    global _pinned_image, _pin_attempted
+    from src.harness.sandbox.policy import checked_image_digest, checked_sandbox_tag
+
+    _pin_attempted = True
+    _pinned_image = None
+    tag = checked_sandbox_tag()
+    if not local_docker_ready() or not local_image_present(tag):
+        logger.info("Sandbox image is not present locally; it was not pulled")
+        return None
+    probe = subprocess.run(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", tag],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    image_id = (probe.stdout or "").strip()
+    if probe.returncode != 0:
+        return None
+    _pinned_image = checked_image_digest(image_id)
+    logger.info("Pinned sandbox image %s", _pinned_image[:19])
+    return _pinned_image
+
+
+def image_is_pinned() -> bool:
+    return _pinned_image is not None and local_image_present(_pinned_image)
+
+
 def local_image_present(image: str) -> bool:
     """True when the image is already local. This does not pull. Executor only."""
     if shutil.which("docker") is None:
@@ -176,17 +220,12 @@ def execute_in_docker(
             "SANDBOX_MODE=docker but the Docker daemon is not reachable from the executor. "
             "Generated code was not executed."
         )
-    from src.config import settings
-
-    if not local_image_present(settings.SANDBOX_IMAGE):
-        raise SandboxUnavailableError(
-            f"Sandbox image {settings.SANDBOX_IMAGE} is not present locally. "
-            "Build it with `docker compose --profile sandbox build sandbox`. "
-            "The image was not pulled and the command was not run on the host.",
-            code="sandbox_image_missing",
-        )
+    if not _pin_attempted:
+        pin_configured_image()
+    if _pinned_image is None or not local_image_present(_pinned_image):
+        raise SandboxUnavailableError(_MISSING_IMAGE, code="sandbox_image_missing")
     name = f"agentforge-sbx-{uuid.uuid4().hex[:12]}"
-    command = build_docker_run(workspace, argv, name=name, attempt_id=attempt_id)
+    command = build_docker_run(workspace, argv, name=name, attempt_id=attempt_id, image=_pinned_image)
     logger.info("Starting sandbox container")
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     stdout_chunks: list[str] = []

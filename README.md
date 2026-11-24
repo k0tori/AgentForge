@@ -212,11 +212,13 @@ docker compose up -d postgres redis
 - **PostgreSQL**（pgvector 扩展）— 端口 5432
 - **Redis** — 端口 6379
 
-不带服务名的 `docker compose up` 还会启动 `api`、`api-init` 和 `executor`，因为它们没有 profile。两种写法都不会构建沙箱镜像：`sandbox` 在 profile `sandbox` 里。`executor` 单独持有 Docker socket；`api` 以 uid 10002 运行，不挂 socket。任务库在卷 `agentforge-tasks` 的 `/var/lib/agentforge/tasks.sqlite`，重建容器不会丢掉任务记录。共享工作区是宿主路径 `/var/lib/agentforge/workspaces`，容器内外使用同一绝对路径。构建沙箱镜像见 `docs/sandbox.md`：
+不带服务名的 `docker compose up -d --build` 会构建并启动 `sandbox`、`executor`、`api-init` 和 `api`。`sandbox` 只是把镜像留在本地的一次性服务，不挂 Docker socket，也不常驻。`executor` 单独持有 Docker socket；`api` 以 uid 10002 运行，不挂 socket。任务库在卷 `agentforge-tasks` 的 `/var/lib/agentforge/tasks.sqlite`，重建容器不会丢掉任务记录。共享工作区是宿主路径 `/var/lib/agentforge/workspaces`，容器内外使用同一绝对路径。只启动数据库时：
 
 ```bash
-docker compose --profile sandbox build sandbox
+docker compose up -d postgres redis
 ```
+
+这不会构建沙箱镜像。完整说明见 `docs/sandbox.md`。
 
 ### 运行测试
 

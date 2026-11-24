@@ -5,12 +5,12 @@
 ## 构建镜像
 
 ```bash
-docker build -f Dockerfile.sandbox -t agentforge-sandbox:latest .
+docker compose up -d --build
 ```
 
-`docker compose --profile sandbox build sandbox` 做同一件事。
+这会构建沙箱镜像，并先跑完一个立刻退出的 `sandbox` 服务，让镜像留在本地。该服务不挂 Docker socket，也不常驻。`docker compose build sandbox` 只构建镜像。只启动数据库时用 `docker compose up -d postgres redis`，那不会构建沙箱镜像。
 
-`docker compose up` 不会构建这个镜像。`sandbox` 在 profile `sandbox` 里，也不是 `api` 的 `depends_on`。只执行 `up` 时，默认 PGE 会在跑测试前因为本地没有 `agentforge-sandbox:latest` 而失败，并且不会改到宿主上执行，也不会自动 `docker pull`。
+镜像不在本地时执行端失败，`--pull never`，不会 `docker pull`，也不会改在宿主上跑。执行端启动时把 `agentforge-sandbox:latest` 解析成当时的本地 `sha256` 镜像 id，之后的 `docker run` 只用这个 id。之后即使有人把 `:latest` 指到别的镜像，已经钉住的进程仍跑原来的 id；这个 id 被删掉则失败，而不是跟着新标签走。执行端要在镜像准备好之后启动。默认 Compose 里 `executor` 等这个一次性服务成功结束。
 
 ## 模式
 
@@ -43,7 +43,7 @@ API 只通过 `/run/agentforge/executor.sock` 请求 `pytest` 或 `ruff`。请�
 
 执行端重启只删除同时带有 `agentforge.managed=1` 和自己的 `agentforge.executor=<标识>` 的容器。进行中的命令因此失败，不会改在宿主上跑。客户端断开或超时只删除这一次启动的那个容器。`SANDBOX_MODE=host` 仍是显式的本机开发选择，不是默认，也不是执行端失败后的退路。API 进程如果自己能连上 Docker socket，预检直接失败。
 
-镜像只用本地的 `agentforge-sandbox:latest`，`--pull never`。按摘要固定镜像还没有做。
+配置里的名字仍是 `agentforge-sandbox:latest`。请求不能改这个名字。真正执行时用的是启动时钉住的本地摘要。
 
 ## 测试
 

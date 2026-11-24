@@ -27,7 +27,7 @@ from src.harness.sandbox.protocol import (
     read_frame,
     send_frame,
 )
-from src.harness.sandbox.runtime import execute_in_docker, local_docker_ready, local_image_present
+from src.harness.sandbox.runtime import execute_in_docker, image_is_pinned, local_docker_ready
 from src.harness.sandbox.workspace_guard import create_attempt, open_attempt, prepare_root
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ def _ping_payload() -> dict:
         return {"ok": False, "error": "unavailable"}
     return {
         "ok": True,
-        "image_present": local_image_present(settings.SANDBOX_IMAGE),
+        "image_present": image_is_pinned(),
         "image": settings.SANDBOX_IMAGE,
     }
 
@@ -222,11 +222,12 @@ def main() -> None:
             settings.SANDBOX_API_GID,
         )
         from src.harness.sandbox.policy import checked_executor_id
-        from src.harness.sandbox.runtime import reap_instance_containers
+        from src.harness.sandbox.runtime import pin_configured_image, reap_instance_containers
 
         # Validate before any docker rm. A missing id must not sweep the daemon.
         instance_id = checked_executor_id()
         reap_instance_containers(instance_id)
+        pin_configured_image()
         _listen(root)
     except SandboxUnavailableError as exc:
         logger.error("executor refused to start: %s", exc)

@@ -90,7 +90,8 @@ async def test_missing_docker_and_image_fail_without_leaking_the_key(task_db: Pa
     assert image_failed["error_code"] == "sandbox_image_missing"
     assert image_failed["status"] == "failed"
     assert "sk-injected" not in str(image_failed)
-    assert "profile sandbox build" in image_failed["error"]
+    assert "docker compose build sandbox" in image_failed["error"]
+    assert "Nothing was pulled" in image_failed["error"]
 
 
 @pytest.mark.asyncio

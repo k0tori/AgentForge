@@ -84,7 +84,7 @@ def _managed() -> str:
 @pytest.fixture(scope="module")
 def stack():
     _require_compose()
-    build = _compose("--profile", "sandbox", "build", "sandbox", "executor", "api", timeout=1800)
+    build = _compose("build", "sandbox", "executor", "api", timeout=1800)
     if build.returncode != 0:
         pytest.fail(f"image build failed\n{build.stderr[-4000:]}")
     up = _compose("up", "-d", "--wait", "--no-deps", "executor", timeout=180)
@@ -560,6 +560,267 @@ def test_restart_reaps_only_this_executor_instance(stack: str):
                 "agentforge-sandbox:latest",
                 "python", "-c",
                 "import shutil; shutil.rmtree('/cleanup', ignore_errors=True)",
+            ],
+            capture_output=True,
+            check=False,
+        )
+
+
+def _start_named_executor(name: str, instance: str, root: Path, sock: Path, image: str) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    sock.mkdir(parents=True, exist_ok=True)
+    started = subprocess.run(
+        [
+            "docker", "run", "-d", "--name", name,
+            "--user", "0:0",
+            "-e", f"SANDBOX_EXECUTOR_ID={instance}",
+            "-e", "SANDBOX_EXECUTOR_SOCK=/run/agentforge/executor.sock",
+            "-e", f"SANDBOX_WORKSPACE_ROOT={root}",
+            "-e", "SANDBOX_API_UID=10002",
+            "-e", "SANDBOX_API_GID=10002",
+            "-e", "SANDBOX_RUN_UID=10002",
+            "-e", "SANDBOX_RUN_GID=10002",
+            "-e", f"SANDBOX_IMAGE={image}",
+            "-v", "/var/run/docker.sock:/var/run/docker.sock",
+            "-v", f"{root}:{root}",
+            "-v", f"{sock}:/run/agentforge",
+            "agentforge-executor:latest",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert started.returncode == 0, started.stderr
+    logs = ""
+
+    def listening() -> bool:
+        nonlocal logs
+        probe = subprocess.run(
+            ["docker", "logs", name],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        logs = probe.stdout + probe.stderr
+        return "executor listening" in logs
+
+    assert _wait_until(listening, 20), logs
+
+
+def test_default_compose_build_publishes_the_sandbox_image():
+    """No sandbox profile. `docker compose build sandbox` is part of the default file."""
+    _require_compose()
+    project = f"m4img{uuid.uuid4().hex[:6]}"
+    base = ["docker", "compose", "-p", project, "-f", str(ROOT / "docker-compose.yml")]
+    services = subprocess.run(
+        [*base, "config", "--services"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        cwd=ROOT,
+    )
+    assert services.returncode == 0, services.stderr
+    assert "sandbox" in services.stdout.split()
+    rendered = subprocess.run(
+        [*base, "config"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        cwd=ROOT,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    assert "pull_policy: never" in rendered.stdout
+    built = subprocess.run(
+        [*base, "build", "sandbox"],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+        cwd=ROOT,
+    )
+    assert built.returncode == 0, built.stderr[-2000:]
+    assert "--profile" not in built.args
+    present = subprocess.run(
+        ["docker", "image", "inspect", "agentforge-sandbox:latest"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert present.returncode == 0, present.stderr
+    one_shot = subprocess.run(
+        [*base, "up", "-d", "--no-deps", "sandbox"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        cwd=ROOT,
+    )
+    assert one_shot.returncode == 0, one_shot.stderr[-2000:]
+    state = subprocess.run(
+        [*base, "ps", "-a", "--format", "json"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+        cwd=ROOT,
+    )
+    assert state.returncode == 0, state.stderr
+    assert '"Service":"sandbox"' in state.stdout or '"Service": "sandbox"' in state.stdout
+    subprocess.run([*base, "down", "--remove-orphans"], capture_output=True, check=False, cwd=ROOT)
+
+
+def test_missing_image_is_not_pulled(stack: str):
+    del stack
+    suffix = uuid.uuid4().hex[:8]
+    tag = f"agentforge-absent-{suffix}:local"
+    instance = f"missing-{suffix}"
+    name = f"af-missing-{suffix}"
+    base = Path("/tmp") / f"agentforge-missing-{suffix}"
+    root = base / "var" / "lib" / "workspaces"
+    sock = base / "sock"
+    try:
+        _start_named_executor(name, instance, root, sock, tag)
+        client = subprocess.run(
+            [
+                "docker", "run", "--rm", "--user", "10002:10002",
+                "--entrypoint", "python",
+                "-v", f"{root}:{root}",
+                "-v", f"{sock}:/run/agentforge",
+                "-e", "SANDBOX_EXECUTOR_SOCK=/run/agentforge/executor.sock",
+                "-e", f"SANDBOX_WORKSPACE_ROOT={root}",
+                "agentforge-executor:latest",
+                "-c",
+                (
+                    "import json,socket; "
+                    "s=socket.socket(socket.AF_UNIX); s.settimeout(5); "
+                    "s.connect('/run/agentforge/executor.sock'); "
+                    "body=json.dumps({'op':'ping'}).encode(); "
+                    "s.sendall(len(body).to_bytes(4,'big')+body); "
+                    "n=int.from_bytes(s.recv(4),'big'); "
+                    "print(s.recv(n).decode())"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert client.returncode == 0, client.stderr
+        payload = json.loads(client.stdout)
+        assert payload["ok"] is True
+        assert payload["image_present"] is False
+        assert payload["image"] == tag
+        absent = subprocess.run(
+            ["docker", "image", "inspect", tag],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        assert absent.returncode != 0
+        assert _instance_ids(instance) == []
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False)
+        leftovers = _instance_ids(instance)
+        if leftovers:
+            subprocess.run(["docker", "rm", "-f", *leftovers], capture_output=True, check=False)
+        subprocess.run(
+            [
+                "docker", "run", "--rm", "--user", "0",
+                "-v", f"{base}:/cleanup", "agentforge-sandbox:latest",
+                "python", "-c", "import shutil; shutil.rmtree('/cleanup', ignore_errors=True)",
+            ],
+            capture_output=True,
+            check=False,
+        )
+
+
+def test_pinned_digest_ignores_a_retagged_latest(stack: str):
+    del stack
+    original = subprocess.run(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", "agentforge-sandbox:latest"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert original.returncode == 0, original.stderr
+    original_id = original.stdout.strip()
+    suffix = uuid.uuid4().hex[:8]
+    instance = f"pin-{suffix}"
+    name = f"af-pin-{suffix}"
+    base = Path("/tmp") / f"agentforge-pin-{suffix}"
+    root = base / "var" / "lib" / "workspaces"
+    sock = base / "sock"
+    try:
+        _start_named_executor(name, instance, root, sock, "agentforge-sandbox:latest")
+        retag = subprocess.run(
+            ["docker", "tag", "python:3.12-slim-bookworm", "agentforge-sandbox:latest"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        assert retag.returncode == 0, retag.stderr
+        decoy = subprocess.run(
+            [
+                "docker", "run", "--rm", "--pull", "never", "--entrypoint", "python",
+                "agentforge-sandbox:latest", "-c", "import pytest",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert decoy.returncode != 0
+        client = subprocess.run(
+            [
+                "docker", "run", "--rm", "--user", "10002:10002",
+                "--entrypoint", "python",
+                "-v", f"{root}:{root}",
+                "-v", f"{sock}:/run/agentforge",
+                "-e", "SANDBOX_EXECUTOR_SOCK=/run/agentforge/executor.sock",
+                "-e", f"SANDBOX_WORKSPACE_ROOT={root}",
+                "agentforge-executor:latest",
+                "-c",
+                (
+                    "import os; from pathlib import Path; "
+                    "from src.harness.sandbox.client import prepare, run; "
+                    "name=prepare(); "
+                    "target=Path(os.environ['SANDBOX_WORKSPACE_ROOT'])/name; "
+                    "target.joinpath('test_pin.py').write_text("
+                    "'def test_pin():\\n    import pytest\\n    assert pytest.__doc__ is not None\\n',"
+                    "encoding='utf-8'); "
+                    "result=run(name,'pytest',60,'test_pin.py'); "
+                    "raise SystemExit(result.returncode)"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        assert client.returncode == 0, client.stdout + client.stderr
+    finally:
+        subprocess.run(
+            ["docker", "tag", original_id, "agentforge-sandbox:latest"],
+            capture_output=True,
+            check=False,
+        )
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False)
+        leftovers = _instance_ids(instance)
+        if leftovers:
+            subprocess.run(["docker", "rm", "-f", *leftovers], capture_output=True, check=False)
+        subprocess.run(
+            [
+                "docker", "run", "--rm", "--user", "0",
+                "-v", f"{base}:/cleanup", "agentforge-sandbox:latest",
+                "python", "-c", "import shutil; shutil.rmtree('/cleanup', ignore_errors=True)",
             ],
             capture_output=True,
             check=False,

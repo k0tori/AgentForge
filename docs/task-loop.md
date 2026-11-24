@@ -17,15 +17,13 @@ export DETERMINISTIC_EXECUTOR=1
 
 ## 启动
 
-默认 `docker` 模式用 Compose。API 容器里没有 Docker socket。工作区目录由执行端在宿主路径 `/var/lib/agentforge/workspaces` 上创建，容器内外是同一条路径。这一步不调用模型。沙箱镜像要在跑 pytest/ruff 之前构建；这条演示本身不跑它们，但执行端必须已经在听 Unix socket。
+默认 `docker` 模式用 Compose。下面这一条命令会构建沙箱镜像并启动执行端和 API，不需要再加单独的 sandbox profile。API 容器里没有 Docker socket。工作区目录由执行端在宿主路径 `/var/lib/agentforge/workspaces` 上创建，容器内外是同一条路径。这一步不调用模型，这条演示也不跑 pytest/ruff，但执行端必须已经在听 Unix socket。
 
 ```bash
-docker compose --profile sandbox build sandbox
-docker compose build executor api
-docker compose up -d
+docker compose up -d --build
 ```
 
-`up` 会带上 `postgres`、`redis`、`executor` 和 `api`。执行端的安装标识是当前 Compose 项目名。同一台机器上的另一套安装要用另一个项目名，否则两边重启会互相删掉沙箱容器。
+`up --build` 会构建沙箱镜像，并带上 `postgres`、`redis`、一次性的 `sandbox`、`executor` 和 `api`。`sandbox` 退出后镜像留在本地，不常驻，也不挂 Docker socket。执行端的安装标识是当前 Compose 项目名。同一台机器上的另一套安装要用另一个项目名，否则两边重启会互相删掉沙箱容器。
 
 在 API 容器里准备一份已提交的 toy-repo 副本。路径必须在容器工作目录的 `.agentforge/` 下面：
 

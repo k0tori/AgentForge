@@ -32,14 +32,16 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Build with: docker compose --profile sandbox build sandbox
-  # This image is what untrusted pytest/ruff runs in. It is not a long-running service.
+  # Built by a normal `docker compose build` / `up --build`. It is not a long-running
+  # service and it does not receive the Docker socket. `true` only publishes the image.
   sandbox:
-    profiles: ["sandbox"]
     build:
       context: .
       dockerfile: Dockerfile.sandbox
     image: agentforge-sandbox:latest
+    pull_policy: never
+    entrypoint: ["true"]
+    restart: "no"
 
   # The only service that receives the Docker socket. It accepts pytest/ruff on a Unix socket.
   executor:
@@ -76,6 +78,9 @@ services:
       timeout: 3s
       retries: 15
       start_period: 3s
+    depends_on:
+      sandbox:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   api-init:

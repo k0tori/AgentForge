@@ -7,7 +7,12 @@ import pytest
 
 from src.config import Settings
 from src.harness.sandbox.errors import SandboxUnavailableError
-from src.harness.sandbox.policy import assert_workspace_mountable, build_docker_run
+from src.harness.sandbox.policy import (
+    assert_workspace_mountable,
+    build_docker_run,
+    checked_image_digest,
+    checked_sandbox_tag,
+)
 from src.tools.test_ops import run_tests
 
 
@@ -43,6 +48,33 @@ def test_run_command_has_no_socket_or_host_secrets(monkeypatch, tmp_path: Path):
     assert command[command.index("python") :] == ["python", "-m", "pytest", "-v", "--tb=short"]
     assert "agentforge.managed=1" in command
     assert "agentforge.executor=policy-test" in command
+
+
+def test_image_pin_accepts_only_a_local_digest(tmp_path: Path):
+    digest = "sha256:" + ("ab" * 32)
+    command = build_docker_run(
+        str(tmp_path),
+        ["python", "-m", "pytest", "-v", "--tb=short"],
+        name="agentforge-sbx-policy",
+        attempt_id="policy-task",
+        image=digest,
+    )
+    assert command[command.index("python") - 1] == digest
+    assert checked_image_digest(digest) == digest
+    with pytest.raises(SandboxUnavailableError):
+        checked_image_digest("agentforge-sandbox:latest")
+    with pytest.raises(SandboxUnavailableError):
+        checked_image_digest("sha256:" + ("AB" * 32))
+    with pytest.raises(SandboxUnavailableError):
+        checked_sandbox_tag("repo/app@sha256:" + ("ab" * 32))
+    with pytest.raises(SandboxUnavailableError):
+        build_docker_run(
+            str(tmp_path),
+            ["python", "-m", "pytest", "-v", "--tb=short"],
+            name="agentforge-sbx-policy",
+            attempt_id="policy-task",
+            image="alpine@" + digest,
+        )
 
 
 def test_python_c_and_shell_are_rejected(tmp_path: Path):

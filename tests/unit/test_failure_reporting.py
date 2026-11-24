@@ -48,7 +48,8 @@ def test_missing_image_does_not_ask_docker_to_pull(monkeypatch):
     with pytest.raises(Exception) as missing:
         require_pge_ready()
     assert missing.value.code == "sandbox_image_missing"
-    assert "compose --profile sandbox build" in str(missing.value)
+    assert "docker compose build sandbox" in str(missing.value)
+    assert "Nothing was pulled" in str(missing.value)
     assert "sk-injected" not in str(missing.value)
 
 
