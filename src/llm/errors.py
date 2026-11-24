@@ -22,8 +22,8 @@ MESSAGES = {
     ),
     "sandbox_image_missing": (
         "The sandbox image is not present locally. "
-        "Build it with `docker compose --profile sandbox build sandbox`. "
-        "Nothing ran on the host."
+        "Build it with `docker compose build sandbox` or `docker compose up --build`. "
+        "Nothing was pulled and nothing ran on the host."
     ),
     "retrieval_unavailable": (
         "Retrieval storage is unavailable. Code search is off for this task. The task was not failed for that."

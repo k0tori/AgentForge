@@ -11,6 +11,7 @@ from src.config import settings
 from src.harness.sandbox.errors import SandboxUnavailableError
 
 _IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$")
+_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MEMORY_RE = re.compile(r"^[0-9]+[bkmg]$", re.IGNORECASE)
 _CPU_RE = re.compile(r"^[0-9]+(\.[0-9]+)?$")
 _ATTEMPT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -60,11 +61,23 @@ def assert_workspace_mountable(workspace: str) -> Path:
     return path
 
 
-def _checked_image() -> str:
-    image = settings.SANDBOX_IMAGE
-    if not _IMAGE_RE.fullmatch(image):
+def checked_sandbox_tag(value: str | None = None) -> str:
+    """Validate the configured tag. Digest refs and registry pins are not accepted here."""
+    image = settings.SANDBOX_IMAGE if value is None else value
+    if not isinstance(image, str) or _IMAGE_RE.fullmatch(image) is None or "@" in image:
         raise SandboxUnavailableError(f"Invalid SANDBOX_IMAGE: {image!r}")
     return image
+
+
+def checked_image_digest(value: str) -> str:
+    """Accept only a local image id. This is not a registry name and not a client field."""
+    if not isinstance(value, str) or _DIGEST_RE.fullmatch(value) is None:
+        raise SandboxUnavailableError("Refusing to run an image id that is not a sha256 digest")
+    return value
+
+
+def _checked_image() -> str:
+    return checked_sandbox_tag()
 
 
 def _checked_memory() -> str:
@@ -137,7 +150,14 @@ def container_argv(argv: list[str]) -> list[str]:
     return list(argv)
 
 
-def build_docker_run(workspace: str, argv: list[str], *, name: str, attempt_id: str) -> list[str]:
+def build_docker_run(
+    workspace: str,
+    argv: list[str],
+    *,
+    name: str,
+    attempt_id: str,
+    image: str | None = None,
+) -> list[str]:
     """Return the argv of a one-shot container. The list is not passed through a shell."""
     mount = assert_workspace_mountable(workspace)
     uid = settings.SANDBOX_RUN_UID
@@ -184,7 +204,7 @@ def build_docker_run(workspace: str, argv: list[str], *, name: str, attempt_id: 
     ]
     for item in CONTAINER_ENV:
         command.extend(["-e", item])
-    command.append(_checked_image())
+    command.append(checked_image_digest(image) if image is not None else _checked_image())
     command.extend(container_argv(argv))
     _assert_command_is_locked(command)
     return command

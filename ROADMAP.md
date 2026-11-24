@@ -29,8 +29,8 @@
 ### P1
 
 - [ ] 真实模型 smoke 只在已有凭据时跑，并单独报告，不与确定性闭环混为一谈
-- [ ] 沙箱镜像随 API 一起发布，减少“忘了 build sandbox”的失败
-- [ ] API 进程不再直接持有 Docker socket（本分支已实现执行端，待验收）
+- [x] API 进程不再直接持有 Docker socket（M3，`03e02cbc65f52ade5acd85c0d06a54d9be6cca5e`）
+- [ ] 沙箱镜像随默认 Compose 构建发布，并在进程内固定本地 image ID（M4，本分支，待验收）
 
 ## 本轮（M1）完成标准
 
@@ -60,7 +60,17 @@
 
 超时的边界：截止时间会取消正在 `await` 的协程，并让本次沙箱子进程在轮询中被杀掉、容器被删除。已经进入 `subprocess` 的 git 命令会跑完这一条，但不会再开始下一条，也不会把任务收成 PASS。它不会把任意后台线程停掉。
 
-M2 还没有验收。
+M1 与 M2 已按限定范围在 PR #2 验收并冻结，head 是 `0f4cad76861032b3d6666eff94256340271f440a`。这不包括真实模型质量，也不包括多 worker。
+
+## M3 已验收
+
+PR #3，head `03e02cbc65f52ade5acd85c0d06a54d9be6cca5e`。API 不持有 Docker socket；执行端通过 Unix socket 只跑 pytest/ruff。重启只回收本安装标识下的容器。
+
+## M4
+
+默认 `docker compose up -d --build` 构建沙箱镜像，不再依赖单独的 sandbox profile。执行端在进程内固定 `docker image inspect` 的本地 image ID，`docker run` 使用这个 ID，`--pull never`。这不是 registry digest，重启会重新解析当前标签。镜像不在本地或已固定的 ID 被删除时失败，不拉取，不在宿主执行。
+
+未做：真实模型 smoke、git 发布进沙箱、多 worker、UI、POSIX ACL、容器逃逸证明、向外部仓库推镜像。
 
 ## 已知风险
 

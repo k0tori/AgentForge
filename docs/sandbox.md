@@ -5,12 +5,16 @@
 ## 构建镜像
 
 ```bash
-docker build -f Dockerfile.sandbox -t agentforge-sandbox:latest .
+docker compose up -d --build
 ```
 
-`docker compose --profile sandbox build sandbox` 做同一件事。
+这会构建沙箱镜像，并先跑完一个立刻退出的 `sandbox` 服务，让镜像留在本地。该服务不挂 Docker socket，也不常驻。`docker compose build sandbox` 只构建镜像。只启动数据库时用 `docker compose up -d postgres redis`，那不会构建沙箱镜像。
 
-`docker compose up` 不会构建这个镜像。`sandbox` 在 profile `sandbox` 里，也不是 `api` 的 `depends_on`。只执行 `up` 时，默认 PGE 会在跑测试前因为本地没有 `agentforge-sandbox:latest` 而失败，并且不会改到宿主上执行，也不会自动 `docker pull`。
+执行端在这次进程启动时读取 `docker image inspect --format '{{.Id}}'`，把当时的本地 image ID 固定住。这不是 registry 的 manifest digest。执行端每次重新启动都会按当前标签再解析一次，所以它也不是跨重启的供应链锁。进程还活着时，标签被改指到别的镜像，`docker run` 仍使用已经固定的 image ID；这个 ID 从本机删除后，真实运行失败，不会跟着新标签走。
+
+`docker compose build` 或 `up --build` 构建 `Dockerfile.sandbox` 时，如果 `FROM` 的基础镜像还不在本地，构建阶段会下载它。运行沙箱时的 `--pull never` 只约束这次 `docker run`，并不表示构建过程离线，也不会去 `docker pull agentforge-sandbox`。
+
+标签在启动时不在本地，执行端不会固定 image ID。随后的 pytest/ruff 失败，不拉取，也不在宿主上执行。执行端要在镜像准备好之后启动。默认 Compose 里 `executor` 等一次性的 `sandbox` 以退出码 0 结束；依赖失败时执行端不会变成 ready。
 
 ## 模式
 
@@ -43,7 +47,7 @@ API 只通过 `/run/agentforge/executor.sock` 请求 `pytest` 或 `ruff`。请�
 
 执行端重启只删除同时带有 `agentforge.managed=1` 和自己的 `agentforge.executor=<标识>` 的容器。进行中的命令因此失败，不会改在宿主上跑。客户端断开或超时只删除这一次启动的那个容器。`SANDBOX_MODE=host` 仍是显式的本机开发选择，不是默认，也不是执行端失败后的退路。API 进程如果自己能连上 Docker socket，预检直接失败。
 
-镜像只用本地的 `agentforge-sandbox:latest`，`--pull never`。按摘要固定镜像还没有做。
+配置里的名字仍是 `agentforge-sandbox:latest`。请求不能改这个名字。真正执行时用的是本进程内固定的本地 image ID。
 
 ## 测试
 
